@@ -1,0 +1,8 @@
+G:\DEV\workspace\AI\KookMusic\RKM\target\debug\deps\symphonia_format_riff-d7f4eb9b45a50118.d: C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\lib.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\common.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\wave\mod.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\wave\chunks.rs
+
+G:\DEV\workspace\AI\KookMusic\RKM\target\debug\deps\libsymphonia_format_riff-d7f4eb9b45a50118.rmeta: C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\lib.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\common.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\wave\mod.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\wave\chunks.rs
+
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\lib.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\common.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\wave\mod.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\symphonia-format-riff-0.5.5\src\wave\chunks.rs:

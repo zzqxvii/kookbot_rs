@@ -1,0 +1,62 @@
+# Rust 构建产物
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE 配置文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 配置文件（包含敏感信息）
+/config.toml
+/config.local.toml
+/config.*.toml
+!config.example.toml
+
+# 日志文件
+/logs/
+*.log
+
+# 缓存目录
+/cache/
+/tmp/
+
+# 下载的音乐文件
+*.mp3
+*.flac
+*.wav
+*.m4a
+*.ogg
+
+# 测试文件
+/test/
+/tests/fixtures/
+
+# 文档生成
+doc/
+*.md.bak
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 证书和密钥
+*.pem
+*.key
+*.crt
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 打包文件
+*.zip
+*.tar.gz
+*.tar.bz2
+*.7z

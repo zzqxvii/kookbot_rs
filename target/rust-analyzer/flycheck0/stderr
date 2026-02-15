@@ -1,0 +1,216 @@
+   0.500561600s  INFO prepare_target{force=false package_id=kook-music-bot v0.1.0 (G:\DEV\workspace\AI\KookMusic\RKM) target="kook-music-bot"}: cargo::core::compiler::fingerprint: fingerprint error for kook-music-bot v0.1.0 (G:\DEV\workspace\AI\KookMusic\RKM)/Check { test: false }/TargetInner { name: "kook-music-bot", doc: true, ..: with_path("G:\\DEV\\workspace\\AI\\KookMusic\\RKM\\src\\main.rs", Edition2021) }
+   0.500619700s  INFO prepare_target{force=false package_id=kook-music-bot v0.1.0 (G:\DEV\workspace\AI\KookMusic\RKM) target="kook-music-bot"}: cargo::core::compiler::fingerprint:     err: failed to read `G:\DEV\workspace\AI\KookMusic\RKM\target\debug\.fingerprint\kook-music-bot-b9331a20db4cdd7d\bin-kook-music-bot`
+
+Caused by:
+    系统找不到指定的文件。 (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.535559800s  INFO prepare_target{force=false package_id=opus v0.3.1 target="opus"}: cargo::core::compiler::fingerprint: fingerprint error for opus v0.3.1/Check { test: false }/TargetInner { ..: lib_target("opus", ["lib"], "C:\\Users\\ZZQ\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\\opus-0.3.1\\src\\lib.rs", Edition2015) }
+   0.535596500s  INFO prepare_target{force=false package_id=opus v0.3.1 target="opus"}: cargo::core::compiler::fingerprint:     err: failed to read `G:\DEV\workspace\AI\KookMusic\RKM\target\debug\.fingerprint\opus-f550ffb75aafea13\lib-opus`
+
+Caused by:
+    系统找不到指定的文件。 (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.536153700s  INFO prepare_target{force=false package_id=audiopus_sys v0.2.2 target="audiopus_sys"}: cargo::core::compiler::fingerprint: fingerprint error for audiopus_sys v0.2.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("audiopus_sys", ["lib"], "C:\\Users\\ZZQ\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\\audiopus_sys-0.2.2\\src\\lib.rs", Edition2018) }
+   0.536173900s  INFO prepare_target{force=false package_id=audiopus_sys v0.2.2 target="audiopus_sys"}: cargo::core::compiler::fingerprint:     err: failed to read `G:\DEV\workspace\AI\KookMusic\RKM\target\debug\.fingerprint\audiopus_sys-58ad0e1dc6da47c0\lib-audiopus_sys`
+
+Caused by:
+    系统找不到指定的文件。 (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.537277400s  INFO prepare_target{force=false package_id=audiopus_sys v0.2.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for audiopus_sys v0.2.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\ZZQ\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\\audiopus_sys-0.2.2\\build.rs", Edition2018) }
+   0.537297200s  INFO prepare_target{force=false package_id=audiopus_sys v0.2.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `G:\DEV\workspace\AI\KookMusic\RKM\target\debug\.fingerprint\audiopus_sys-2bcf34f90770c4db\run-build-script-build-script-build`
+
+Caused by:
+    系统找不到指定的文件。 (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_filter_source_repo
+  14: git_filter_source_repo
+  15: git_libgit2_prerelease
+  16: <unknown>
+  17: <unknown>
+  18: <unknown>
+  19: <unknown>
+  20: git_midx_writer_dump
+  21: git_filter_source_repo
+  22: git_midx_writer_dump
+  23: BaseThreadInitThunk
+  24: RtlUserThreadStart
+   0.605477900s  INFO prepare_target{force=false package_id=kook-music-bot v0.1.0 (G:\DEV\workspace\AI\KookMusic\RKM) target="kook-music-bot"}: cargo::core::compiler::fingerprint: fingerprint error for kook-music-bot v0.1.0 (G:\DEV\workspace\AI\KookMusic\RKM)/Check { test: true }/TargetInner { name: "kook-music-bot", doc: true, ..: with_path("G:\\DEV\\workspace\\AI\\KookMusic\\RKM\\src\\main.rs", Edition2021) }
+   0.605518200s  INFO prepare_target{force=false package_id=kook-music-bot v0.1.0 (G:\DEV\workspace\AI\KookMusic\RKM) target="kook-music-bot"}: cargo::core::compiler::fingerprint:     err: failed to read `G:\DEV\workspace\AI\KookMusic\RKM\target\debug\.fingerprint\kook-music-bot-f163cdc9012f0a9c\test-bin-kook-music-bot`
+
+Caused by:
+    系统找不到指定的文件。 (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   Compiling audiopus_sys v0.2.2
+error: failed to run custom build command for `audiopus_sys v0.2.2`
+note: To improve backtraces for build dependencies, set the CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG=true environment variable to enable debug information generation.
+
+Caused by:
+  process didn't exit successfully: `G:\DEV\workspace\AI\KookMusic\RKM\target\debug\build\audiopus_sys-950b1032e2f98216\build-script-build` (exit code: 101)
+  --- stdout
+  cargo:info=No feature or environment variable found, linking by default.
+  cargo:info=Opus source path used: "\\\\?\\G:\\DEV\\dependency\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\\audiopus_sys-0.2.2\\opus".
+  cargo:info=Building Opus via CMake.
+  CMAKE_TOOLCHAIN_FILE_x86_64-pc-windows-msvc = None
+  CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = None
+  HOST_CMAKE_TOOLCHAIN_FILE = None
+  CMAKE_TOOLCHAIN_FILE = None
+  CMAKE_GENERATOR_x86_64-pc-windows-msvc = None
+  CMAKE_GENERATOR_x86_64_pc_windows_msvc = None
+  HOST_CMAKE_GENERATOR = None
+  CMAKE_GENERATOR = None
+  CMAKE_PREFIX_PATH_x86_64-pc-windows-msvc = None
+  CMAKE_PREFIX_PATH_x86_64_pc_windows_msvc = None
+  HOST_CMAKE_PREFIX_PATH = None
+  CMAKE_PREFIX_PATH = None
+  CMAKE_x86_64-pc-windows-msvc = None
+  CMAKE_x86_64_pc_windows_msvc = None
+  HOST_CMAKE = None
+  CMAKE = None
+
+  --- stderr
+  running: "cmake" "C:\\Users\\ZZQ\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\\audiopus_sys-0.2.2\\opus" "-B" "G:\\DEV\\workspace\\AI\\KookMusic\\RKM\\target\\debug\\build\\audiopus_sys-2bcf34f90770c4db\\out\\build" "-G" "Visual Studio 17 2022" "-Thost=x64" "-Ax64" "-DCMAKE_INSTALL_PREFIX=G:\\DEV\\workspace\\AI\\KookMusic\\RKM\\target\\debug\\build\\audiopus_sys-2bcf34f90770c4db\\out" "-DCMAKE_C_FLAGS= -nologo -MD -Brepro -W0" "-DCMAKE_C_FLAGS_DEBUG= -nologo -MD -Brepro -W0" "-DCMAKE_CXX_FLAGS= -nologo -MD -Brepro -W0" "-DCMAKE_CXX_FLAGS_DEBUG= -nologo -MD -Brepro -W0" "-DCMAKE_ASM_FLAGS= -nologo -MD -Brepro -W0" "-DCMAKE_ASM_FLAGS_DEBUG= -nologo -MD -Brepro -W0" "-DCMAKE_BUILD_TYPE=Debug"
+
+  thread 'main' (8224) panicked at C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\cmake-0.1.57\src\lib.rs:1132:5:
+
+  failed to execute command: program not found
+  is `cmake` not installed?
+
+  build script failed, must exit now
+  stack backtrace:
+     0: std::panicking::panic_handler
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\std\src\panicking.rs:698
+     1: core::panicking::panic_fmt
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\core\src\panicking.rs:80
+     2: cmake::find_cmake_executable::{{closure}}
+     3: cmake::find_cmake_executable::{{closure}}
+     4: cmake::Config::build
+     5: std::rt::lang_start
+     6: __ImageBase
+     7: build_script_build::main
+     8: std::rt::lang_start
+     9: std::rt::lang_start
+    10: std::rt::lang_start
+    11: std::rt::lang_start_internal::closure$0
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\std\src\rt.rs:175
+    12: std::panicking::catch_unwind::do_call
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\std\src\panicking.rs:590
+    13: std::panicking::catch_unwind
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\std\src\panicking.rs:553
+    14: std::panic::catch_unwind
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\std\src\panic.rs:359
+    15: std::rt::lang_start_internal
+               at /rustc/ded5c06cf21d2b93bffd5d884aa6e96934ee4234/library\std\src\rt.rs:171
+    16: std::rt::lang_start
+    17: main
+    18: invoke_main
+               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:78
+    19: __scrt_common_main_seh
+               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+    20: BaseThreadInitThunk
+    21: RtlUserThreadStart
+  note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.

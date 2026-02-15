@@ -1,0 +1,80 @@
+[package]
+name = "kook-music-bot"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "Kook Music Bot - Pure Rust implementation without FFmpeg"
+rust-version = "1.75"
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# 音频解码 - 支持 MP3, FLAC, WAV 等
+symphonia = { version = "0.5.4", features = ["mp3", "flac", "wav", "isomp4", "aac"] }
+symphonia-core = "0.5.4"
+
+# Opus 编码
+opus = "0.3"
+
+# HTTP 客户端 - 用于 Kook API
+reqwest = { version = "0.11", features = ["json", "multipart", "stream"] }
+
+# WebSocket 客户端 - 用于 Kook 实时事件
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+
+# JSON 处理
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_repr = "0.1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "1.0"
+
+# 配置管理
+toml = "0.8"
+dirs = "5.0"
+
+# 命令行参数解析
+clap = { version = "4.4", features = ["derive"] }
+
+# 时间和日期
+chrono = { version = "0.4", features = ["serde"] }
+
+# 字节处理
+bytes = "1.5"
+byteorder = "1.5"
+
+# 并发
+parking_lot = "0.12"
+crossbeam = "0.8"
+
+# 用于 resample（如果需要）
+# rubato = "0.14"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
+wiremock = "0.6"
+
+[[bin]]
+name = "kook-music-bot"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true

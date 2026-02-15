@@ -1,0 +1,11 @@
+G:\DEV\workspace\AI\KookMusic\RKM\target\debug\deps\url-604a632623812bf2.d: C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\lib.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\host.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\origin.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\parser.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\path_segments.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\slicing.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\quirks.rs
+
+G:\DEV\workspace\AI\KookMusic\RKM\target\debug\deps\liburl-604a632623812bf2.rmeta: C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\lib.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\host.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\origin.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\parser.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\path_segments.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\slicing.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\quirks.rs
+
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\lib.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\host.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\origin.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\parser.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\path_segments.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\slicing.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\url-2.5.8\src\quirks.rs:

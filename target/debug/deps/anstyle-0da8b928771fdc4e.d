@@ -1,0 +1,10 @@
+G:\DEV\workspace\AI\KookMusic\RKM\target\debug\deps\anstyle-0da8b928771fdc4e.d: C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\lib.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\macros.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\color.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\effect.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\reset.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\style.rs
+
+G:\DEV\workspace\AI\KookMusic\RKM\target\debug\deps\libanstyle-0da8b928771fdc4e.rmeta: C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\lib.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\macros.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\color.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\effect.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\reset.rs C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\style.rs
+
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\lib.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\macros.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\color.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\effect.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\reset.rs:
+C:\Users\ZZQ\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-e791a3f93f26854f\anstyle-1.0.13\src\style.rs:
