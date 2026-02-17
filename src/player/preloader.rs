@@ -1,5 +1,5 @@
 use crate::error::{BotError, Result};
-use crate::models::Music;
+use super::Music;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

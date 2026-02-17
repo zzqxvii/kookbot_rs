@@ -1,5 +1,5 @@
 use crate::error::{BotError, Result};
-use crate::models::Music;
+use crate::player::Music;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

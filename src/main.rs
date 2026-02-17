@@ -10,7 +10,7 @@ use kook_music_bot::config::{BotConfig, ConnectionMode};
 use kook_music_bot::webhook::{WebhookHandler, WebhookServer, WebhookConfig};
 use kook_music_bot::gateway::{GatewayClient, EventHandler, Event};
 use kook_music_bot::gateway::events::{ReadyEvent, MessageCreateEvent};
-use kook_music_bot::voice::VoiceManager;
+use kook_music_bot::player::VoiceManager;
 use async_trait::async_trait;
 use serde_json::Value;
 

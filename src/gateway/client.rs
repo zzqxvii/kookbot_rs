@@ -142,6 +142,10 @@ impl GatewayClient {
                             debug!("收到 Pong");
                             None
                         }
+                        Ok(Some(Ok(Message::Frame(_)))) => {
+                            debug!("收到 Frame");
+                            None
+                        }
                         Ok(Some(Err(e))) => {
                             error!("WebSocket 错误: {}", e);
                             None
@@ -161,7 +165,7 @@ impl GatewayClient {
 
             // 处理消息
             if let Some(text) = message_text {
-                self.handle_text_message(text).await;
+                self.handle_message(Message::Text(text)).await;
             }
         }
     }

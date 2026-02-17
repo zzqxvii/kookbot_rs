@@ -3,7 +3,7 @@ use crate::audio::ffmpeg_encoder::{FFmpegOpusConfig, FFmpegOpusEncoder};
 use crate::audio::rtp::{RtpSender, RtpStats};
 use crate::config::{AudioConfig, NetworkConfig};
 use crate::error::Result;
-use crate::models::VoiceStreamingInfo;
+use crate::player::VoiceStreamingInfo;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

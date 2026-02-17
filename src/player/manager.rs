@@ -2,7 +2,7 @@ use crate::api::client::KookClient;
 use crate::audio::streamer::AudioStreamer;
 use crate::config::BotConfig;
 use crate::error::{BotError, Result};
-use crate::models::VoiceStreamingInfo;
+use super::VoiceStreamingInfo;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;

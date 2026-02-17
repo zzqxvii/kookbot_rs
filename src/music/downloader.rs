@@ -1,5 +1,5 @@
 use crate::error::{BotError, Result};
-use crate::models::Music;
+use crate::player::Music;
 use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
