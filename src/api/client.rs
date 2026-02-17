@@ -6,16 +6,61 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use tracing::{debug, error, info};
 
-/// Kook API 基础 URL
 const KOOK_API_BASE: &str = "https://www.kookapp.cn/api/v3";
 
-/// Gateway 响应
 #[derive(Debug, serde::Deserialize)]
 struct GatewayResponse {
     url: String,
 }
 
-/// Kook API 客户端
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Guild {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub topic: String,
+    #[serde(default)]
+    pub master_id: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub notify_type: i32,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub enable_open: bool,
+    #[serde(default)]
+    pub open_id: String,
+    #[serde(default)]
+    pub default_channel_id: String,
+    #[serde(default)]
+    pub welcome_channel_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Channel {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "user_id")]
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(rename = "guild_id")]
+    #[serde(default)]
+    pub guild_id: String,
+    #[serde(rename = "parent_id")]
+    #[serde(default)]
+    pub parent_id: String,
+    #[serde(default)]
+    pub level: i32,
+    #[serde(default)]
+    pub limit_amount: i32,
+    pub is_category: bool,
+    #[serde(rename = "type")]
+    pub channel_type: i32,
+    #[serde(default)]
+    pub topic: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct KookClient {
     http: Client,
@@ -24,7 +69,6 @@ pub struct KookClient {
 }
 
 impl KookClient {
-    /// 创建新的 Kook 客户端
     pub fn new(config: &BotConfig) -> Result<Self> {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(config.network.timeout))
@@ -38,7 +82,6 @@ impl KookClient {
         })
     }
 
-    /// 发送 API 请求
     async fn request<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -79,20 +122,17 @@ impl KookClient {
             });
         }
 
-        api_response.data.ok_or_else(|| {
-            BotError::KookApiError {
-                code: -1,
-                message: "响应数据为空".to_string(),
-            }
+        api_response.data.ok_or_else(|| BotError::KookApiError {
+            code: -1,
+            message: "响应数据为空".to_string(),
         })
     }
 
-    /// 获取当前登录用户信息
     pub async fn get_current_user(&self) -> Result<User> {
+        info!("获取当前用户信息...");
         self.request(Method::GET, "/user/me", None).await
     }
 
-    /// 获取 Gateway URL
     pub async fn get_gateway_url(&self) -> Result<String> {
         #[derive(serde::Deserialize)]
         struct GatewayData {
@@ -103,11 +143,37 @@ impl KookClient {
         Ok(data.url)
     }
 
-    /// 加入语音频道
-    pub async fn join_voice_channel(
-        &self,
-        channel_id: &str,
-    ) -> Result<VoiceConnectionInfo> {
+    pub async fn get_guild_list(&self) -> Result<Vec<Guild>> {
+        info!("获取服务器列表...");
+        
+        #[derive(serde::Deserialize)]
+        struct GuildListData {
+            items: Vec<Guild>,
+            #[serde(default)]
+            meta: serde_json::Value,
+        }
+
+        let data: GuildListData = self.request(
+            Method::GET, 
+            "/guild/list?page=1&page_size=100", 
+            None
+        ).await?;
+        
+        info!("获取到 {} 个服务器", data.items.len());
+        Ok(data.items)
+    }
+
+    pub async fn get_channel_list(&self, guild_id: &str) -> Result<Vec<Channel>> {
+        debug!("获取服务器 {} 的频道列表...", guild_id);
+        
+        let endpoint = format!("/channel/list?guild_id={}", guild_id);
+        let channels: Vec<Channel> = self.request(Method::GET, &endpoint, None).await?;
+        
+        debug!("服务器 {} 有 {} 个频道", guild_id, channels.len());
+        Ok(channels)
+    }
+
+    pub async fn join_voice_channel(&self, channel_id: &str) -> Result<VoiceConnectionInfo> {
         let body = json!({
             "channel_id": channel_id,
         });
@@ -124,11 +190,7 @@ impl KookClient {
         Ok(info)
     }
 
-    /// 离开语音频道
-    pub async fn leave_voice_channel(
-        &self,
-        channel_id: &str,
-    ) -> Result<()> {
+    pub async fn leave_voice_channel(&self, channel_id: &str) -> Result<()> {
         let body = json!({
             "channel_id": channel_id,
         });
@@ -142,7 +204,6 @@ impl KookClient {
         Ok(())
     }
 
-    /// 获取用户加入的语音频道
     pub async fn get_user_voice_channel(
         &self,
         guild_id: &str,
@@ -157,7 +218,6 @@ impl KookClient {
         }
     }
 
-    /// 发送频道消息
     pub async fn send_channel_message(
         &self,
         channel_id: &str,

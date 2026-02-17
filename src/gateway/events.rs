@@ -1,189 +1,223 @@
-//! Gateway 事件定义和处理
-//!
-//! 定义 Kook Gateway 发送的各种事件
+//! Gateway 事件定义
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
+
+/// 消息通道类型
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ChannelType {
+    Group,
+    Person,
+    Broadcast,
+}
+
+/// 消息类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[repr(i32)]
+pub enum MessageType {
+    Text = 1,
+    Image = 2,
+    Video = 3,
+    File = 4,
+    Audio = 8,
+    KMarkdown = 9,
+    Card = 10,
+    System = 255,
+}
 
 /// 事件处理器 trait
 #[async_trait::async_trait]
 pub trait EventHandler: Send + Sync {
-    /// 处理通用事件
     async fn on_event(&self, event: Event) {
         match event {
-            Event::Ready(data) => self.on_ready(data).await,
-            Event::Resumed => self.on_resumed().await,
-            Event::MessageCreate(data) => self.on_message_create(data).await,
-            Event::MessageUpdate(data) => self.on_message_update(data).await,
-            Event::MessageDelete(data) => self.on_message_delete(data).await,
-            Event::ChannelCreate(data) => self.on_channel_create(data).await,
-            Event::ChannelUpdate(data) => self.on_channel_update(data).await,
-            Event::ChannelDelete(data) => self.on_channel_delete(data).await,
-            Event::GuildMemberAdd(data) => self.on_guild_member_add(data).await,
-            Event::GuildMemberRemove(data) => self.on_guild_member_remove(data).await,
-            Event::GuildMemberUpdate(data) => self.on_guild_member_update(data).await,
-            Event::VoiceStateUpdate(data) => self.on_voice_state_update(data).await,
-            Event::Unknown(data) => self.on_unknown_event(data).await,
-            _ => {}
+            Event::Message(data) => self.on_message(data).await,
+            Event::SystemMessage(data) => self.on_system_message(data).await,
+            Event::Unknown(data) => self.on_unknown(data).await,
         }
     }
 
-    /// Bot 准备好接收事件
-    async fn on_ready(&self, _data: ReadyEvent) {}
-
-    /// 会话恢复成功
-    async fn on_resumed(&self) {}
-
-    /// 收到新消息
-    async fn on_message_create(&self, _data: MessageCreateEvent) {}
-
-    /// 消息更新
-    async fn on_message_update(&self, _data: MessageUpdateEvent) {}
-
-    /// 消息删除
-    async fn on_message_delete(&self, _data: MessageDeleteEvent) {}
-
-    /// 频道创建
-    async fn on_channel_create(&self, _data: ChannelCreateEvent) {}
-
-    /// 频道更新
-    async fn on_channel_update(&self, _data: ChannelUpdateEvent) {}
-
-    /// 频道删除
-    async fn on_channel_delete(&self, _data: ChannelDeleteEvent) {}
-
-    /// 成员加入服务器
-    async fn on_guild_member_add(&self, _data: GuildMemberAddEvent) {}
-
-    /// 成员离开服务器
-    async fn on_guild_member_remove(&self, _data: GuildMemberRemoveEvent) {}
-
-    /// 成员信息更新
-    async fn on_guild_member_update(&self, _data: GuildMemberUpdateEvent) {}
-
-    /// 语音状态更新
-    async fn on_voice_state_update(&self, _data: VoiceStateUpdateEvent) {}
-
-    /// 未知事件
-    async fn on_unknown_event(&self, _data: UnknownEvent) {}
+    async fn on_message(&self, _data: MessageData) {}
+    async fn on_system_message(&self, _data: SystemMessageData) {}
+    async fn on_unknown(&self, _data: serde_json::Value) {}
 }
 
 /// 事件枚举
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// 准备好
-    Ready(ReadyEvent),
-    /// 会话恢复
-    Resumed,
-    /// 收到消息
-    MessageCreate(MessageCreateEvent),
-    /// 消息更新
-    MessageUpdate(MessageUpdateEvent),
-    /// 消息删除
-    MessageDelete(MessageDeleteEvent),
-    /// 频道创建
-    ChannelCreate(ChannelCreateEvent),
-    /// 频道更新
-    ChannelUpdate(ChannelUpdateEvent),
-    /// 频道删除
-    ChannelDelete(ChannelDeleteEvent),
-    /// 服务器成员加入
-    GuildMemberAdd(GuildMemberAddEvent),
-    /// 服务器成员离开
-    GuildMemberRemove(GuildMemberRemoveEvent),
-    /// 服务器成员更新
-    GuildMemberUpdate(GuildMemberUpdateEvent),
-    /// 语音状态更新
-    VoiceStateUpdate(VoiceStateUpdateEvent),
-    /// 未知事件
-    Unknown(UnknownEvent),
-    /// 心跳确认
-    HeartbeatAck,
-    /// 心跳发送
-    HeartbeatSent,
+    Message(MessageData),
+    SystemMessage(SystemMessageData),
+    Unknown(serde_json::Value),
 }
 
-// ... 事件数据结构定义（ReadyEvent, MessageCreateEvent 等）...
-// 为了保持简洁，这里省略具体的事件结构定义
-// 实际实现中需要包含所有事件类型的完整定义
-
-/// 准备好事件
+/// 消息数据 (s=0, type 非255)
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ReadyEvent {
-    pub version: u32,
-    pub session_id: String,
-    pub user: User,
-    pub guilds: Vec<Guild>,
-}
-
-/// 用户
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct User {
-    pub id: String,
-    pub username: String,
-    #[serde(rename = "avatar")]
-    pub avatar: Option<String>,
-    #[serde(rename = "bot")]
-    pub bot: Option<bool>,
-}
-
-/// 服务器
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Guild {
-    pub id: String,
-    pub name: String,
-}
-
-/// 消息创建事件
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MessageCreateEvent {
-    pub id: String,
-    #[serde(rename = "channel_id")]
-    pub channel_id: String,
-    #[serde(rename = "guild_id")]
-    pub guild_id: Option<String>,
-    pub author: User,
+pub struct MessageData {
+    /// 消息通道类型
+    pub channel_type: ChannelType,
+    /// 消息类型
+    #[serde(rename = "type")]
+    pub msg_type: MessageType,
+    /// 目标ID (频道ID或服务器ID)
+    pub target_id: String,
+    /// 发送者ID
+    pub author_id: String,
+    /// 消息内容
     pub content: String,
-    pub timestamp: String,
-    #[serde(rename = "edited_timestamp")]
-    pub edited_timestamp: Option<String>,
-    pub mentions: Vec<User>,
+    /// 消息ID
+    pub msg_id: String,
+    /// 消息时间戳(毫秒)
+    pub msg_timestamp: i64,
+    /// 随机串
+    #[serde(default)]
+    pub nonce: String,
+    /// 额外信息
+    pub extra: MessageExtra,
 }
 
-// 其他事件类型...（MessageUpdateEvent, ChannelCreateEvent 等）
-pub type MessageUpdateEvent = MessageCreateEvent;
-pub type MessageDeleteEvent = MessageCreateEvent;
-pub type ChannelCreateEvent = MessageCreateEvent;
-pub type ChannelUpdateEvent = MessageCreateEvent;
-pub type ChannelDeleteEvent = MessageCreateEvent;
-
-/// 成员加入服务器事件
+/// 消息额外信息 (type 非255)
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct GuildMemberAddEvent {
-    pub user: User,
-    #[serde(rename = "guild_id")]
+pub struct MessageExtra {
+    /// 消息类型
+    #[serde(rename = "type")]
+    pub msg_type: MessageType,
+    /// 服务器ID
     pub guild_id: String,
-    pub nick: Option<String>,
-    pub roles: Vec<String>,
+    /// 频道名称
+    #[serde(default)]
+    pub channel_name: String,
+    /// 提及用户列表
+    #[serde(default)]
+    pub mention: Vec<String>,
+    /// 是否@所有人
+    #[serde(default)]
+    pub mention_all: bool,
+    /// 提及角色列表
+    #[serde(default)]
+    pub mention_roles: Vec<String>,
+    /// 是否@在线用户
+    #[serde(default)]
+    pub mention_here: bool,
+    /// 作者信息
+    pub author: Author,
 }
 
-// 成员事件别名
-pub type GuildMemberRemoveEvent = GuildMemberAddEvent;
-pub type GuildMemberUpdateEvent = GuildMemberAddEvent;
-
-/// 语音状态更新事件
+/// 作者信息
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct VoiceStateUpdateEvent {
-    pub user_id: String,
-    #[serde(rename = "channel_id")]
-    pub channel_id: Option<String>,
-    #[serde(rename = "guild_id")]
+pub struct Author {
+    /// 用户ID
+    pub id: String,
+    /// 用户名
+    pub username: String,
+    /// 昵称
+    #[serde(default)]
+    pub nickname: String,
+    /// 识别码
+    #[serde(default)]
+    pub identify_num: String,
+    /// 头像
+    #[serde(default)]
+    pub avatar: String,
+    /// 是否在线
+    #[serde(default)]
+    pub online: bool,
+    /// 是否机器人
+    #[serde(default)]
+    pub bot: bool,
+    /// 状态
+    #[serde(default)]
+    pub status: i32,
+    /// 手机已验证
+    #[serde(default)]
+    pub mobile_verified: bool,
+    /// 系统标识
+    #[serde(default)]
+    pub sys: bool,
+}
+
+/// 系统消息数据 (s=0, type=255)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SystemMessageData {
+    /// 消息通道类型
+    pub channel_type: ChannelType,
+    /// 目标ID
+    pub target_id: String,
+    /// 发送者ID (系统消息为1)
+    pub author_id: String,
+    /// 消息内容
+    pub content: String,
+    /// 消息ID
+    pub msg_id: String,
+    /// 消息时间戳
+    pub msg_timestamp: i64,
+    /// 额外信息
+    pub extra: SystemMessageExtra,
+}
+
+/// 系统消息额外信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SystemMessageExtra {
+    /// 事件类型
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// 服务器ID
+    #[serde(default)]
     pub guild_id: String,
+    /// 事件数据
+    #[serde(default)]
+    pub body: serde_json::Value,
 }
 
-/// 未知事件
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct UnknownEvent {
-    #[serde(flatten)]
-    pub data: serde_json::Value,
+impl MessageData {
+    pub fn is_text(&self) -> bool {
+        self.msg_type == MessageType::Text
+    }
+
+    pub fn is_image(&self) -> bool {
+        self.msg_type == MessageType::Image
+    }
+
+    pub fn is_kmarkdown(&self) -> bool {
+        self.msg_type == MessageType::KMarkdown
+    }
+
+    pub fn is_card(&self) -> bool {
+        self.msg_type == MessageType::Card
+    }
+
+    pub fn is_from_bot(&self) -> bool {
+        self.extra.author.bot
+    }
+
+    pub fn is_group_message(&self) -> bool {
+        self.channel_type == ChannelType::Group
+    }
+
+    pub fn is_private_message(&self) -> bool {
+        self.channel_type == ChannelType::Person
+    }
+
+    pub fn mentions_user(&self, user_id: &str) -> bool {
+        self.extra.mention.contains(&user_id.to_string())
+    }
+
+    pub fn mentions_all(&self) -> bool {
+        self.extra.mention_all
+    }
+}
+
+/// 解析事件
+pub fn parse_event(data: serde_json::Value) -> Option<Event> {
+    let msg_type = data.get("type")?.as_i64()?;
+    
+    match msg_type {
+        255 => {
+            let sys_data: SystemMessageData = serde_json::from_value(data).ok()?;
+            Some(Event::SystemMessage(sys_data))
+        }
+        1 | 2 | 3 | 4 | 8 | 9 | 10 => {
+            let msg_data: MessageData = serde_json::from_value(data).ok()?;
+            Some(Event::Message(msg_data))
+        }
+        _ => Some(Event::Unknown(data)),
+    }
 }

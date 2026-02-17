@@ -6,8 +6,11 @@
 # ============================================
 
 # Kook Bot Token
-# 从 Kook 开发者平台获取: https://developer.kookapp.cn/
-token = "你的 Bot Token 在这里"
+# 从 Kook 开发者平台获取: https://developer.kookapp.cn/app/index
+token = "你的 Bot Token"
+
+# 连接模式: websocket 或 webhook
+mode = "websocket"
 
 # 命令前缀
 prefix = "!"
@@ -16,21 +19,50 @@ prefix = "!"
 admins = ["你的用户ID"]
 
 # ============================================
-# Kook API 配置
+# WebSocket 模式配置
 # ============================================
 
-[kook]
-# API 基础 URL
-api_base = "https://www.kookapp.cn/api/v3"
-
-# WebSocket URL
-ws_url = "wss://websocket.kookapp.cn/"
-
+[websocket]
 # 心跳间隔(秒)
 heartbeat_interval = 30
 
-# 是否使用压缩
+# 是否启用压缩
 compress = true
+
+# 重连尝试次数
+reconnect_attempts = 5
+
+# 重连延迟(秒)
+reconnect_delay = 5
+
+# ============================================
+# Webhook 模式配置
+# ============================================
+
+[webhook]
+# 监听地址
+host = "0.0.0.0"
+
+# 监听端口
+port = 8080
+
+# 回调路径
+path = "/webhook"
+
+# 验证令牌 (从 Kook 开发者平台获取)
+verify_token = "你的验证令牌"
+
+# 加密密钥 (可选，用于解密消息)
+# encrypt_key = ""
+
+# 是否启用 SSL
+use_ssl = false
+
+# SSL 证书路径 (use_ssl = true 时需要)
+# cert_path = "/path/to/cert.pem"
+
+# SSL 密钥路径 (use_ssl = true 时需要)
+# key_path = "/path/to/key.pem"
 
 # ============================================
 # 音频配置
@@ -40,12 +72,11 @@ compress = true
 # 默认音量 (0.0 - 1.0)
 volume = 0.5
 
-# 默认比特率 (bps)
+# 比特率 (bps)
 # Kook 支持: 16000, 32000, 64000, 96000, 128000
 bit_rate = 64000
 
-# 采样率 (Hz)
-# Kook 只支持 48000
+# 采样率 (Kook 只支持 48000)
 sample_rate = 48000
 
 # 声道数 (1=单声道, 2=立体声)
@@ -75,31 +106,29 @@ packet_size = 1200
 # 音乐源配置
 # ============================================
 
-[music_source]
-# 网易云音乐 Cookie (可选)
-# 用于获取更高音质的音乐
-# netease_cookie = "MUSIC_U=..."
-
-# QQ 音乐 Cookie (可选)
-# qqmusic_cookie = "uin=..."
-
-# Bilibili SESSDATA (可选)
-# 用于获取 B 站音频
-# bilibili_sessdata = "..."
-
+[music]
 # 音乐缓存目录
 cache_dir = "./cache"
 
 # 最大缓存大小(MB)
 max_cache_size = 1024
 
+# 网易云音乐 Cookie (可选，用于更高音质)
+# netease_cookie = "MUSIC_U=..."
+
+# QQ 音乐 Cookie (可选)
+# qqmusic_cookie = "uin=..."
+
+# Bilibili Cookie (可选)
+# bilibili_cookie = "SESSDATA=..."
+
 # ============================================
-# 播放队列配置
+# 播放器配置
 # ============================================
 
-[queue]
+[player]
 # 最大队列长度
-max_size = 100
+max_queue_size = 100
 
 # 是否允许重复歌曲
 allow_duplicates = false
@@ -110,6 +139,9 @@ autoplay = true
 # 随机播放
 shuffle = false
 
+# 预加载数量
+preload_count = 2
+
 # ============================================
 # 日志配置
 # ============================================
@@ -118,7 +150,7 @@ shuffle = false
 # 日志级别: trace, debug, info, warn, error
 level = "info"
 
-# 日志文件路径 (可选，默认输出到控制台)
+# 日志文件路径 (可选，不设置则只输出到控制台)
 # file = "logs/kook-music-bot.log"
 
 # 是否输出到控制台

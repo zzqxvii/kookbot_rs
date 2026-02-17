@@ -1,3 +1,3 @@
 pub mod client;
 
-pub use client::KookClient;
+pub use client::{Channel, Guild, KookClient};

@@ -2,8 +2,8 @@
 //!
 //! 接收 KOOK 发送的 Webhook 事件
 
+use crate::config::WebhookConfig;
 use crate::error::{BotError, Result};
-use crate::webhook::{verifier::WebhookHeaders, WebhookConfig};
 use crate::webhook::handler::{WebhookHandler, WebhookRequest};
 use axum::{
     extract::State,
