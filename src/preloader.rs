@@ -1,11 +1,11 @@
 use crate::error::{BotError, Result};
 use crate::models::Music;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::{mpsc, Mutex, Semaphore};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// 预加载任务
 #[derive(Debug, Clone)]
@@ -122,9 +122,10 @@ impl PreloadManager {
         self.update_status(&music_id, PreloadStatus::Pending).await;
 
         // 提交任务
-        self.task_tx.send(task).await.map_err(|e| {
-            BotError::ConfigError(format!("提交预加载任务失败: {}", e))
-        })?;
+        self.task_tx
+            .send(task)
+            .await
+            .map_err(|e| BotError::ConfigError(format!("提交预加载任务失败: {}", e)))?;
 
         debug!("提交预加载任务: {}", music_id);
         Ok(())
@@ -132,23 +133,17 @@ impl PreloadManager {
 
     /// 获取音乐 ID（用于缓存键）
     fn get_music_id(&self, music: &Music) -> String {
-        format!("{}_{}", music.platform, music.title)
-            .replace(|c: char| !c.is_alphanumeric(), "_")
+        format!("{}_{}", music.platform, music.title).replace(|c: char| !c.is_alphanumeric(), "_")
     }
 
     /// 更新预加载状态
-    async fn update_status(&self,
-        music_id: &str,
-        status: PreloadStatus,
-    ) {
+    async fn update_status(&self, music_id: &str, status: PreloadStatus) {
         let mut statuses = self.statuses.lock().await;
         statuses.insert(music_id.to_string(), status);
     }
 
     /// 检查音乐是否已就绪
-    pub async fn is_ready(&self,
-        music: &Music,
-    ) -> bool {
+    pub async fn is_ready(&self, music: &Music) -> bool {
         let music_id = self.get_music_id(music);
         let statuses = self.statuses.lock().await;
 
@@ -159,10 +154,7 @@ impl PreloadManager {
     }
 
     /// 获取缓存路径
-    pub async fn get_cached_path(
-0026self,
-        music: &Music,
-    ) -> Option<PathBuf> {
+    pub async fn get_cached_path(&self, music: &Music) -> Option<PathBuf> {
         let music_id = self.get_music_id(music);
         let statuses = self.statuses.lock().await;
 
@@ -174,7 +166,8 @@ impl PreloadManager {
     }
 
     /// 预加载接下来的 N 首歌曲
-    pub async fn preload_ahead(&self,
+    pub async fn preload_ahead(
+        &self,
         playlist: &[(Music, String)],
         current_index: usize,
         count: usize,
@@ -212,23 +205,20 @@ impl PreloadManager {
     }
 
     /// 清理缓存
-    pub async fn cleanup_cache(&self,
-        max_size_mb: u64,
-    ) -> Result<()> {
+    pub async fn cleanup_cache(&self, max_size_mb: u64) -> Result<()> {
         let mut entries = Vec::new();
 
         // 读取缓存目录
-        let mut dir = fs::read_dir(&self.config.cache_dir).await
+        let mut dir = fs::read_dir(&self.config.cache_dir)
+            .await
             .map_err(|e| BotError::IoError(e))?;
 
         while let Some(entry) = dir.next_entry().await.map_err(|e| BotError::IoError(e))? {
-            let metadata = entry.metadata().await
-                .map_err(|e| BotError::IoError(e))?;
+            let metadata = entry.metadata().await.map_err(|e| BotError::IoError(e))?;
 
             if metadata.is_file() {
                 let size = metadata.len();
-                let modified = metadata.modified()
-                    .map_err(|e| BotError::IoError(e))?;
+                let modified = metadata.modified().map_err(|e| BotError::IoError(e))?;
 
                 entries.push((entry.path(), size, modified));
             }
@@ -239,7 +229,11 @@ impl PreloadManager {
         let max_size = max_size_mb * 1024 * 1024;
 
         if total_size <= max_size {
-            debug!("缓存大小正常: {} / {} MB", total_size / 1024 / 1024, max_size_mb);
+            debug!(
+                "缓存大小正常: {} / {} MB",
+                total_size / 1024 / 1024,
+                max_size_mb
+            );
             return Ok(());
         }
 

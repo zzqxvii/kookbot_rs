@@ -1,13 +1,13 @@
 use crate::error::{BotError, Result};
 use std::fs::File;
 use std::path::Path;
-use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
+use symphonia::core::audio::Signal;
 use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 /// 音频解码器
 pub struct AudioDecoder {
@@ -123,7 +123,7 @@ impl AudioDecoder {
             match self.decoder.decode(&packet) {
                 Ok(audio_buf) => {
                     // 转换为 i16 样本
-                    let samples = self.convert_to_i16(&audio_buf);
+                    let samples = Self::convert_to_i16(&audio_buf);
                     return Ok(Some(samples));
                 }
                 Err(symphonia::core::errors::Error::DecodeError(e)) => {
@@ -142,12 +142,9 @@ impl AudioDecoder {
 
     /// 将音频缓冲区转换为 i16 样本
     fn convert_to_i16(
-        &self,
         audio_buf: &symphonia::core::audio::AudioBufferRef,
     ) -> Vec<i16> {
         use symphonia::core::audio::AudioBufferRef;
-        use symphonia::core::conv::FromSample;
-        use symphonia::core::sample::Sample;
 
         // 获取声道数和帧数
         let channels = audio_buf.spec().channels.count();
@@ -196,10 +193,10 @@ impl AudioDecoder {
                 // 对于其他格式，使用 symphonia 的转换
                 let mut sample_buf =
                     symphonia::core::audio::SampleBuffer::<i16>::new(
-                        frames,
+                        frames as u64,
                         *audio_buf.spec(),
                     );
-                sample_buf.copy_interleaved_ref(audio_buf);
+                sample_buf.copy_interleaved_ref(audio_buf.clone());
                 samples.extend_from_slice(sample_buf.samples());
             }
         }

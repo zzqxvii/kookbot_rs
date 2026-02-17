@@ -23,6 +23,9 @@ pub enum BotError {
     #[error("Kook API error: {code} - {message}")]
     KookApiError { code: i32, message: String },
 
+    #[error("Gateway error: {0}")]
+    GatewayError(String),
+
     #[error("Invalid configuration: {0}")]
     ConfigError(String),
 

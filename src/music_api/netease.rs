@@ -133,10 +133,11 @@ impl NeteaseClient {
     ) -> Result<Vec<NeteaseSong>> {
         let url = format!("{}/search", self.base_url);
 
-        let mut params = HashMap::new();
-        params.insert("keywords", keyword);
-        params.insert("type", "1"); // 1 = 单曲
-        params.insert("limit", &limit.to_string());
+        let params = vec![
+            ("keywords".to_string(), keyword.to_string()),
+            ("type".to_string(), "1".to_string()), // 1 = 单曲
+            ("limit".to_string(), limit.to_string()),
+        ];
 
         let response = self.send_request::<SearchResponse>(Method::GET, &url, Some(params)).await?;
 
@@ -163,9 +164,10 @@ impl NeteaseClient {
     ) -> Result<Option<String>> {
         let url = format!("{}/song/url", self.base_url);
 
-        let mut params = HashMap::new();
-        params.insert("id", &song_id.to_string());
-        params.insert("br", &bitrate.to_string());
+        let params = vec![
+            ("id".to_string(), song_id.to_string()),
+            ("br".to_string(), bitrate.to_string()),
+        ];
 
         let response = self.send_request::<SongUrlResponse>(Method::GET, &url, Some(params)).await?;
 
@@ -187,8 +189,9 @@ impl NeteaseClient {
     pub async fn get_playlist(&self, playlist_id: u64) -> Result<NeteasePlaylist> {
         let url = format!("{}/playlist/detail", self.base_url);
 
-        let mut params = HashMap::new();
-        params.insert("id", &playlist_id.to_string());
+        let params = vec![
+            ("id".to_string(), playlist_id.to_string()),
+        ];
 
         let response = self.send_request::<PlaylistDetailResponse>(Method::GET, &url, Some(params)).await?;
 
@@ -226,7 +229,7 @@ impl NeteaseClient {
         &self,
         method: Method,
         url: &str,
-        params: Option<HashMap<&str, &str>>,
+        params: Option<Vec<(String, String)>>,
     ) -> Result<T> {
         let mut request = self.http.request(method, url);
 
@@ -245,16 +248,14 @@ impl NeteaseClient {
 
         let status = response.status();
         if !status.is_success() {
-            return Err(BotError::HttpError(
-                reqwest::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("HTTP error: {}", status)
-                ))
-            ));
+            return Err(BotError::KookApiError {
+                code: status.as_u16() as i32,
+                message: format!("HTTP error: {}", status),
+            });
         }
 
         let data: T = response.json().await
-            .map_err(|e| BotError::JsonError(e))?;
+            .map_err(|e| BotError::HttpError(e))?;
 
         Ok(data)
     }

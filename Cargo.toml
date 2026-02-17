@@ -15,14 +15,25 @@ tokio-util = { version = "0.7", features = ["codec"] }
 symphonia = { version = "0.5.4", features = ["mp3", "flac", "wav", "isomp4", "aac"] }
 symphonia-core = "0.5.4"
 
-# Opus 编码
-opus = "0.3"
+# Opus 编码 - 暂时注释，Windows 需要手动安装 opus 库
+# opus = "0.3"
 
 # HTTP 客户端 - 用于 Kook API
 reqwest = { version = "0.11", features = ["json", "multipart", "stream"] }
 
 # WebSocket 客户端 - 用于 Kook 实时事件
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+
+# Webhook HTTP 服务器
+axum = { version = "0.7", features = ["tokio", "macros"] }
+tower = "0.4"
+
+# Webhook 签名验证
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
 
 # JSON 处理
 serde = { version = "1.0", features = ["derive"] }
@@ -36,6 +47,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # 错误处理
 anyhow = "1.0"
 thiserror = "1.0"
+
+# 异步 trait
+async-trait = "0.1"
 
 # 配置管理
 toml = "0.8"
@@ -57,6 +71,9 @@ crossbeam = "0.8"
 
 # 用于 resample（如果需要）
 # rubato = "0.14"
+
+# 随机播放
+rand = "0.8"
 
 [dev-dependencies]
 tokio-test = "0.4"

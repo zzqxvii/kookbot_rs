@@ -1,8 +1,8 @@
 use crate::audio::decoder::AudioDecoder;
-use crate::audio::encoder::{OpusConfig, OpusEncoder};
-use crate::audio::rtp::RtpSender;
+use crate::audio::ffmpeg_encoder::{FFmpegOpusConfig, FFmpegOpusEncoder};
+use crate::audio::rtp::{RtpSender, RtpStats};
 use crate::config::{AudioConfig, NetworkConfig};
-use crate::error::{BotError, Result};
+use crate::error::Result;
 use crate::models::VoiceStreamingInfo;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,8 +16,8 @@ use tracing::{debug, error, info, trace, warn};
 pub struct AudioStreamer {
     /// RTP 发送器
     rtp_sender: RtpSender,
-    /// Opus 编码器
-    opus_encoder: OpusEncoder,
+    /// FFmpeg Opus 编码器
+    opus_encoder: FFmpegOpusEncoder,
     /// 是否正在运行
     running: Arc<AtomicBool>,
     /// 音频配置
@@ -44,15 +44,16 @@ impl AudioStreamer {
             streaming_info.sample_rate,
         )?;
 
-        // 创建 Opus 编码器配置
-        let opus_config = OpusConfig {
+        // 创建 FFmpeg Opus 编码器配置
+        let opus_config = crate::audio::ffmpeg_encoder::FFmpegOpusConfig {
             sample_rate: streaming_info.sample_rate,
             channels: streaming_info.channels,
             bit_rate: streaming_info.bit_rate,
-            application: crate::audio::encoder::OpusApplication::Audio,
+            frame_duration_ms: 20,
+            ffmpeg_path: None, // 使用系统 PATH 中的 FFmpeg
         };
 
-        let opus_encoder = OpusEncoder::new(opus_config)?;
+        let opus_encoder = crate::audio::ffmpeg_encoder::FFmpegOpusEncoder::new(opus_config)?;
 
         info!(
             "音频流处理器创建成功: 目标={}, SSRC={}, {}Hz, {} 声道, {}bps",
@@ -166,7 +167,7 @@ impl AudioStreamer {
     }
 
     /// 获取统计信息
-    pub fn stats(&self) -<RtpStats {
+    pub fn stats(&self) -> RtpStats {
         self.rtp_sender.stats()
     }
 }

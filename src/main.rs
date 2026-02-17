@@ -1,221 +1,548 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{error, info, warn};
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, error, info, warn};
 
-mod api;
-mod audio;
-mod config;
-mod error;
-mod models;
-mod music_api;
-mod playlist;
-mod preloader;
-mod queue;
-mod utils;
-mod voice;
-
-use voice::VoiceManager;
+use kook_music_bot::api::KookClient;
+use kook_music_bot::config::{BotConfig, ConnectionMode};
+use kook_music_bot::webhook::{WebhookHandler, WebhookServer, WebhookConfig};
+use kook_music_bot::gateway::{GatewayClient, EventHandler, Event};
+use kook_music_bot::gateway::events::{ReadyEvent, MessageCreateEvent};
+use kook_music_bot::voice::VoiceManager;
+use async_trait::async_trait;
+use serde_json::Value;
 
 /// Kook 音乐机器人
 #[derive(Parser, Debug)]
 #[command(name = "kook-music-bot")]
-#[command(about = "Kook Music Bot - Pure Rust implementation without FFmpeg")]
+#[command(about = "Kook Music Bot - Rust 实现")]
 #[command(version = "0.1.0")]
 struct Cli {
-    /// 配置文件路径
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
-
     /// 创建示例配置文件
     #[arg(long)]
     init: bool,
 
-    /// 日志级别
-    #[arg(short, long, default_value = "info")]
-    log_level: String,
-
-    /// 测试模式: 加入频道、播放测试音频、然后离开
+    /// 测试 FFmpeg
     #[arg(long)]
-    test_stream: bool,
+    test_ffmpeg: bool,
 
-    /// 测试音频文件路径
-    #[arg(long, default_value = "test.mp3")]
-    test_file: String,
-
-    /// 频道 ID
+    /// 配置文件路径
     #[arg(short, long)]
-    channel_id: Option<String>,
+    config: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
-    // 初始化日志
-    init_logging(&cli.log_level)?;
+    println!("╔══════════════════════════════════════╗");
+    println!("║     Kook Music Bot - Rust 实现       ║");
+    println!("╚══════════════════════════════════════╝");
+    println!();
 
-    info!("Kook Music Bot 启动中...");
-
-    // 处理初始化命令
     if cli.init {
-        init_config().await?;
+        create_config().await?;
         return Ok(());
     }
 
-    // 加载配置
-    let config = load_config(&cli).await?;
-
-    // 测试模式
-    if cli.test_stream {
-        run_test_mode(&config, &cli).await?;
+    if cli.test_ffmpeg {
+        test_ffmpeg().await?;
         return Ok(());
     }
 
-    // 正常运行模式
-    run_bot(&config).await?;
-
+    run_bot(cli.config).await?;
     Ok(())
 }
 
-/// 初始化日志系统
-fn init_logging(log_level: &str) -> Result<()> {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::EnvFilter;
+async fn create_config() -> Result<()> {
+    println!("【创建配置文件】\n");
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("kook_music_bot={}", log_level)));
+    let config_content = r#"# Kook 音乐机器人配置文件
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_line_number(true),
-        )
-        .with(env_filter)
-        .init();
+token = "你的 Bot Token"
+prefix = "!"
+admins = ["你的用户ID"]
 
-    Ok(())
-}
+[webhook]
+host = "0.0.0.0"
+port = 8080
+path = "/webhook"
+verify_token = "你的 Webhook 验证令牌"
+use_ssl = false
 
-/// 初始化配置文件
-async fn init_config() -> Result<()> {
-    let config = config::BotConfig::create_example();
+[audio]
+volume = 0.5
+bit_rate = 64000
+sample_rate = 48000
+channels = 2
 
-    // 确定配置文件路径
-    let config_path = if let Some(default_path) = config::BotConfig::default_path() {
-        // 确保目录存在
-        if let Some(parent) = default_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        default_path
-    } else {
-        PathBuf::from("config.toml")
-    };
+[network]
+timeout = 30
+retries = 3
+packet_size = 1200
+"#;
 
-    // 检查文件是否已存在
-    if config_path.exists() {
-        warn!("配置文件已存在: {:?}", config_path);
-        print!("是否覆盖? [y/N]: ");
-        use std::io::Write;
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-
-        if !input.trim().eq_ignore_ascii_case("y") {
-            info!("取消配置文件创建");
-            return Ok(());
-        }
+    if std::path::Path::new("config.toml").exists() {
+        println!("配置文件已存在！");
+        return Ok(());
     }
 
-    // 保存配置文件
-    config.save_to_file(&config_path)?;
-    info!("配置文件已创建: {:?}", config_path);
-
-    println!("\n配置文件已创建: {:?}", config_path);
-    println!("请编辑配置文件，设置你的 Kook Bot Token 和其他选项。");
+    tokio::fs::write("config.toml", config_content).await?;
+    println!("✓ 配置文件已创建: config.toml");
+    println!("\n请编辑 config.toml，填写你的 Kook Bot Token 和 Webhook 验证令牌");
+    println!("获取 Token: https://developer.kookapp.cn/app/index");
 
     Ok(())
 }
 
-/// 加载配置
-async fn load_config(cli: &Cli) -> Result<config::BotConfig> {
-    // 确定配置文件路径
-    let config_path = if let Some(ref path) = cli.config {
-        path.clone()
-    } else if let Some(default_path) = config::BotConfig::default_path() {
-        default_path
-    } else {
-        PathBuf::from("config.toml")
-    };
+async fn test_ffmpeg() -> Result<()> {
+    println!("【FFmpeg 测试】\n");
 
-    info!("加载配置文件: {:?}", config_path);
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(["-version"])
+        .output()
+        .await?;
+
+    if output.status.success() {
+        let version = String::from_utf8_lossy(&output.stdout);
+        println!("FFmpeg 版本:");
+        for line in version.lines().take(3) {
+            println!("  {}", line);
+        }
+        println!();
+    }
+
+    println!("检查 Opus 编码器支持...");
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(["-encoders"])
+        .output()
+        .await?;
+
+    let encoders = String::from_utf8_lossy(&output.stdout);
+    if encoders.contains("libopus") {
+        println!("  ✓ libopus 编码器可用");
+    } else {
+        println!("  ✗ libopus 编码器不可用");
+    }
+
+    println!();
+    Ok(())
+}
+
+async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
+    println!("【启动机器人】\n");
 
     // 加载配置
-    let config = config::BotConfig::from_file(&config_path)
-        .map_err(|e| {
-            error!("加载配置文件失败: {}", e);
-            eprintln!("错误: 无法加载配置文件");
-            eprintln!("提示: 运行 `kook-music-bot --init` 创建示例配置文件");
-            e
-        })?;
+    let config_path = config_path.unwrap_or_else(|| PathBuf::from("config.toml"));
+    let config = BotConfig::from_file(&config_path)?;
 
-    info!("配置文件加载成功");
-    Ok(config)
-}
+    println!("✓ 配置加载成功");
+    println!("  命令前缀: {}", config.prefix);
+    println!("  连接模式: {:?}", config.mode);
 
-/// 运行测试模式
-async fn run_test_mode(config: &config::BotConfig, cli: &Cli) -> Result<()> {
-    info!("运行测试模式");
-
-    // 获取频道 ID
-    let channel_id = cli.channel_id.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("测试模式需要指定频道 ID，使用 --channel-id"))?;
-
-    // 创建语音管理器
-    let mut voice_manager = VoiceManager::new(config).await?;
-
-    // 加入频道
-    info!("加入频道: {}", channel_id);
-    voice_manager.join_channel(channel_id).await?;
-
-    // 播放测试文件
-    let test_file = &cli.test_file;
-    info!("播放测试文件: {}", test_file);
-
-    if let Err(e) = voice_manager.play_file(test_file).await {
-        error!("播放文件失败: {}", e);
+    // 检查 FFmpeg
+    match tokio::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .await
+    {
+        Ok(_) => {
+            println!("✓ FFmpeg 可用");
+        }
+        Err(_) => {
+            println!("✗ FFmpeg 未找到，语音功能可能不可用");
+            println!("  请安装 FFmpeg: https://ffmpeg.org/download.html");
+        }
     }
 
-    // 等待一段时间
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // 根据模式启动不同的连接方式
+    match config.mode {
+        ConnectionMode::Webhook => {
+            start_webhook_mode(config).await?;
+        }
+        ConnectionMode::Websocket => {
+            start_websocket_mode(config).await?;
+        }
+    }
 
-    // 离开频道
-    info!("离开频道");
-    voice_manager.leave_channel().await?;
-
-    info!("测试模式完成");
     Ok(())
 }
 
-/// 运行机器人主循环
-async fn run_bot(_config: &config::BotConfig) -> Result<()> {
-    info!("启动 Kook 音乐机器人");
+/// 启动 Webhook 模式
+async fn start_webhook_mode(config: BotConfig) -> Result<()> {
+    let webhook_config = WebhookConfig {
+        host: config.webhook.host.clone(),
+        port: config.webhook.port,
+        path: config.webhook.path.clone(),
+        verify_token: config.webhook.verify_token.clone(),
+        use_ssl: config.webhook.use_ssl,
+    };
 
-    // TODO: 实现完整的机器人逻辑
-    // 包括：
-    // 1. 连接 Kook WebSocket
-    // 2. 监听命令
-    // 3. 管理播放队列
-    // 4. 处理语音频道操作
+    println!("\n【启动 Webhook 服务器】");
+    println!("  地址: http://{}:{}{}", webhook_config.host, webhook_config.port, webhook_config.path);
 
-    info!("机器人运行中...");
+    // 创建事件处理器
+    let handler = Arc::new(BotWebhookHandler::new(config.clone()));
 
-    // 保持运行
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    // 创建并启动 Webhook 服务器
+    let server = WebhookServer::new(webhook_config, handler);
+
+    println!("✓ Webhook 服务器已启动，等待 KOOK 事件...");
+
+    server.run().await?;
+
+    Ok(())
+}
+
+/// 启动 WebSocket 模式
+async fn start_websocket_mode(config: BotConfig) -> Result<()> {
+    println!("\n【启动 WebSocket 连接】");
+
+    // 创建 API 客户端来获取 Gateway URL
+    let api_client = KookClient::new(&config)?;
+
+    // 获取 Gateway URL
+    println!("  正在获取 Gateway 地址...");
+    let gateway_url = api_client.get_gateway_url().await?;
+    println!("  ✓ Gateway 地址: {}", gateway_url);
+
+    // 创建 Gateway 客户端
+    let token = config.token.clone();
+
+    // 创建客户端 (使用基本意图)
+    let client = GatewayClient::with_basic_intents(&token);
+
+    // 创建事件处理器
+    let handler = BotEventHandler::new(config.clone());
+
+    // 设置事件处理器
+    client.set_event_handler(Box::new(handler)).await;
+
+    // 连接到 Gateway (传入获取到的 URL)
+    client.connect(&gateway_url).await?;
+
+    println!("✓ WebSocket 客户端已连接，等待 KOOK 事件...");
+
+    // 运行客户端 (阻塞直到断开)
+    client.run().await?;
+
+    Ok(())
+}
+
+/// Bot Webhook 事件处理器
+struct BotWebhookHandler {
+    config: BotConfig,
+    api_client: Arc<RwLock<Option<KookClient>>>,
+    voice_manager: Arc<Mutex<Option<VoiceManager>>>,
+}
+
+impl BotWebhookHandler {
+    fn new(config: BotConfig) -> Self {
+        let api_client = Arc::new(RwLock::new(
+            KookClient::new(&config).ok()));
+
+        Self {
+            config,
+            api_client,
+            voice_manager: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// 获取或创建 VoiceManager
+    async fn get_or_create_voice_manager(&self) -> Result<()> {
+        let mut vm = self.voice_manager.lock().await;
+        if vm.is_none() {
+            let new_vm = VoiceManager::new(&self.config).await?;
+            *vm = Some(new_vm);
+        }
+        Ok(())
+    }
+
+    /// 处理消息事件
+    async fn handle_message(&self, data: Value) {
+        // 解析消息
+        let author_id = data.get("author_id").and_then(|v| v.as_str());
+        let content = data.get("content").and_then(|v| v.as_str());
+        let channel_id = data.get("target_id").and_then(|v| v.as_str());
+
+        if author_id.is_none() || content.is_none() || channel_id.is_none() {
+            return;
+        }
+
+        let author_id = author_id.unwrap();
+        let content = content.unwrap();
+        let channel_id = channel_id.unwrap();
+
+        // 忽略自己的消息
+        if data.get("extra")
+            .and_then(|e| e.get("author"))
+            .and_then(|a| a.get("bot"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        // 检查是否是命令
+        if let Some((cmd, args)) = self.parse_command(content) {
+            info!(
+                "收到命令: {} (来自: {}, 频道: {})",
+                cmd, author_id, channel_id
+            );
+
+            match cmd {
+                "help" | "h" => {
+                    self.send_help(channel_id).await;
+                }
+                "join" | "j" => {
+                    // 尝试获取用户当前所在的语音频道
+                    if let Some(client) = self.api_client.read().await.as_ref() {
+                        // 注意：这里需要从消息中获取 guild_id
+                        // 暂时返回提示信息
+                        let _ = client.send_channel_message(channel_id, "⚠️ 加入语音频道功能需要服务器ID，请使用 !join <频道ID> 直接指定频道").await;
+                    }
+                }
+                "leave" | "l" => {
+                    let mut vm = self.voice_manager.lock().await;
+                    if let Some(ref mut voice_manager) = *vm {
+                        match voice_manager.leave_channel().await {
+                            Ok(_) => {
+                                if let Some(client) = self.api_client.read().await.as_ref() {
+                                    let _ = client.send_channel_message(channel_id, "✅ 已离开语音频道").await;
+                                }
+                            }
+                            Err(e) => {
+                                if let Some(client) = self.api_client.read().await.as_ref() {
+                                    let _ = client.send_channel_message(channel_id, &format!("❌ 离开语音频道失败: {}", e)).await;
+                                }
+                            }
+                        }
+                    } else {
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client.send_channel_message(channel_id, "⚠️ 当前不在任何语音频道中").await;
+                        }
+                    }
+                }
+                "play" | "p" => {
+                    if args.is_empty() {
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client
+                                .send_channel_message(
+                                    channel_id,
+                                    "❌ 请提供搜索关键词或链接\n用法: `!play <关键词>`",
+                                )
+                                .await;
+                        }
+                    } else {
+                        let query = args.join(" ");
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client
+                                .send_channel_message(
+                                    channel_id,
+                                    &format!("🎵 搜索 \"{}\" 功能开发中...", query),
+                                )
+                                .await;
+                        }
+                    }
+                }
+                _ => {
+                    debug!("未知命令: {}", cmd);
+                }
+            }
+        }
+    }
+
+    /// 解析命令
+    fn parse_command<'a>(&self, content: &'a str) -> Option<(&'a str, Vec<&'a str>)> {
+        if !content.starts_with(&self.config.prefix) {
+            return None;
+        }
+
+        let content = &content[self.config.prefix.len()..];
+        let parts: Vec<&str> = content.split_whitespace().collect();
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        let cmd = parts[0];
+        let args = parts[1..].to_vec();
+
+        Some((cmd, args))
+    }
+
+    /// 发送帮助消息
+    async fn send_help(&self, channel_id: &str) {
+        let content = r#"🎵 **Kook Music Bot** 🎵
+
+**可用命令：**
+`{}help` - 显示此帮助
+`{}join` - 加入你的语音频道
+`{}leave` - 离开语音频道
+`{}play <关键词>` - 播放音乐（功能开发中）
+`{}search <关键词>` - 搜索音乐（功能开发中）
+
+**注意：** 目前机器人仅支持基础功能，完整功能正在开发中。
+"#;
+
+        let content = content.replace("{}", &self.config.prefix);
+
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            if let Err(e) = client.send_channel_message(channel_id, &content).await {
+                error!("发送帮助消息失败: {}", e);
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl WebhookHandler for BotWebhookHandler {
+    async fn handle_event(&self, event_type: u32, data: Value) {
+        match event_type {
+            0 => {
+                // 验证/挑战
+                debug!("收到验证请求");
+            }
+            1 => {
+                // 消息创建
+                self.handle_message(data).await;
+            }
+            _ => {
+                debug!("收到未处理的事件类型: {}", event_type);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// WebSocket 模式的 BotEventHandler
+// ============================================================================
+
+/// Bot WebSocket 事件处理器
+struct BotEventHandler {
+    config: BotConfig,
+    api_client: Arc<RwLock<Option<KookClient>>>,
+}
+
+impl BotEventHandler {
+    fn new(config: BotConfig) -> Self {
+        let api_client = Arc::new(RwLock::new(
+            KookClient::new(&config).ok()));
+
+        Self {
+            config,
+            api_client,
+        }
+    }
+
+    /// 解析命令
+    fn parse_command<'a>(&self, content: &'a str) -> Option<(&'a str, Vec<&'a str>)> {
+        if !content.starts_with(&self.config.prefix) {
+            return None;
+        }
+
+        let content = &content[self.config.prefix.len()..];
+        let parts: Vec<&str> = content.split_whitespace().collect();
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        let cmd = parts[0];
+        let args = parts[1..].to_vec();
+
+        Some((cmd, args))
+    }
+
+    /// 处理消息事件
+    async fn handle_message(&self,
+        author_id: &str,
+        content: &str,
+        channel_id: &str,
+        data: Value
+    ) {
+        // 忽略自己的消息
+        if data.get("extra")
+            .and_then(|e| e.get("author"))
+            .and_then(|a| a.get("bot"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        // 最简单的测试：收到 "test123" 回复 "test321"
+        if content == "test123" {
+            info!("收到 test123，准备回复 test321");
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(channel_id, "test321").await;
+            }
+            return;
+        }
+
+        // 检查是否是命令
+        if let Some((cmd, _args)) = self.parse_command(content) {
+            info!(
+                "[WebSocket] 收到命令: {} (来自: {}, 频道: {})",
+                cmd, author_id, channel_id
+            );
+
+            match cmd {
+                "help" | "h" => {
+                    self.send_help(channel_id).await;
+                }
+                _ => {
+                    debug!("[WebSocket] 未知命令: {}", cmd);
+                }
+            }
+        }
+    }
+
+    /// 发送帮助消息
+    async fn send_help(&self,
+        channel_id: &str
+    ) {
+        let content = r#"🎵 **Kook Music Bot (WebSocket)** 🎵
+
+**可用命令：**
+`{}help` - 显示此帮助
+`{}join` - 加入你的语音频道
+`{}leave` - 离开语音频道
+`{}play <关键词>` - 播放音乐
+
+**连接模式：** WebSocket
+"#;
+
+        let content = content.replace("{}", &self.config.prefix);
+
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            if let Err(e) = client.send_channel_message(channel_id, &content).await {
+                error!("发送帮助消息失败: {}", e);
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl EventHandler for BotEventHandler {
+    async fn on_ready(&self,
+        _data: ReadyEvent
+    ) {
+        info!("[WebSocket] 机器人已就绪");
+    }
+
+    async fn on_message_create(&self,
+        data: MessageCreateEvent
+    ) {
+        // 使用 handle_message 处理消息
+        self.handle_message(
+            &data.author.id,
+            &data.content,
+            &data.channel_id,
+            serde_json::to_value(&data).unwrap_or_default()
+        ).await;
     }
 }

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 /// 队列项状态
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,8 +118,10 @@ impl QueueManager {
         // 检查是否允许重复
         if !self.config.allow_duplicates {
             let queue = self.queue.read().await;
-            if queue.iter().any(|item| item.music.title == music.title &&
-                                   item.music.author == music.author) {
+            if queue
+                .iter()
+                .any(|item| item.music.title == music.title && item.music.author == music.author)
+            {
                 return Err(BotError::ConfigError("歌曲已在队列中".to_string()));
             }
         }
@@ -148,17 +150,19 @@ impl QueueManager {
     /// 获取下一首要播放的歌曲（并更新索引）
     pub async fn next(&self) -> Option<QueueItem> {
         let mut current = self.current_index.write().await;
-        let queue = self.queue.read().await;
 
-        let next_index = match *current {
-            Some(idx) if idx + 1 < queue.len() => idx + 1,
-            None if !queue.is_empty() => 0,
-            _ => return None,
+        // 先计算下一首索引
+        let next_index = {
+            let queue = self.queue.read().await;
+            match *current {
+                Some(idx) if idx + 1 < queue.len() => idx + 1,
+                None if !queue.is_empty() => 0,
+                _ => return None,
+            }
         };
 
         // 更新之前歌曲的状态
         if let Some(idx) = *current {
-            drop(queue);
             let mut queue = self.queue.write().await;
             if let Some(item) = queue.get_mut(idx) {
                 item.status = QueueItemStatus::Completed;
@@ -166,13 +170,18 @@ impl QueueManager {
         }
 
         // 获取下一首
-        let item = queue.get(next_index).cloned();
-        drop(queue);
+        let item = {
+            let queue = self.queue.read().await;
+            queue.get(next_index).cloned()
+        };
 
         // 更新当前索引和状态
         *current = Some(next_index);
-        if let Some(ref mut item) = self.queue.write().await.get_mut(next_index) {
-            item.status = QueueItemStatus::Playing;
+        {
+            let mut queue = self.queue.write().await;
+            if let Some(ref mut item) = queue.get_mut(next_index) {
+                item.status = QueueItemStatus::Playing;
+            }
         }
 
         // 触发后续歌曲的预加载
@@ -189,9 +198,7 @@ impl QueueManager {
         let current = self.current_index.read().await;
         let queue = self.queue.read().await;
 
-        (*current)
-            .and_then(|idx| queue.get(idx))
-            .cloned()
+        (*current).and_then(|idx| queue.get(idx)).cloned()
     }
 
     /// 获取队列长度
@@ -238,14 +245,22 @@ impl QueueManager {
     }
 
     /// 启动预加载任务
-    pub async fn start_preload_task(&self,
-        downloader: impl Fn(usize, QueueItem) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf>> + Send + 'static>> + Send + Sync + 'static,
+    pub async fn start_preload_task(
+        &self,
+        downloader: impl Fn(
+                usize,
+                QueueItem,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<PathBuf>> + Send + 'static>,
+            > + Send
+            + Sync
+            + 'static,
     ) {
         let preload_rx = Arc::clone(&self.preload_rx);
         let queue = Arc::clone(&self.queue);
 
         tokio::spawn(async move {
-            let rx = preload_rx.lock().await;
+            let mut rx = preload_rx.lock().await;
 
             while let Some(index) = rx.recv().await {
                 let queue_guard = queue.read().await;
@@ -279,7 +294,7 @@ impl QueueManager {
                             let mut queue_guard = queue.write().await;
                             if let Some(item) = queue_guard.get_mut(index) {
                                 item.status = QueueItemStatus::Failed {
-                                    error: e.to_string()
+                                    error: e.to_string(),
                                 };
                             }
                             warn!("预加载失败: 索引 {} - {}", index, e);

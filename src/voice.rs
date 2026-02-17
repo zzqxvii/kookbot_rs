@@ -1,8 +1,8 @@
 use crate::api::client::KookClient;
-use crate::audio::streamer::{AudioStreamer, VoiceStreamingInfo};
+use crate::audio::streamer::AudioStreamer;
 use crate::config::BotConfig;
 use crate::error::{BotError, Result};
-use crate::models::VoiceConnectionInfo;
+use crate::models::VoiceStreamingInfo;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -36,9 +36,7 @@ impl VoiceManager {
     }
 
     /// 加入语音频道
-    pub async fn join_channel(&mut self,
-        channel_id: &str,
-    ) -> Result<()> {
+    pub async fn join_channel(&mut self, channel_id: &str) -> Result<()> {
         if self.current_channel.is_some() {
             warn!("已经在语音频道中，先离开当前频道");
             self.leave_channel().await?;
@@ -51,9 +49,7 @@ impl VoiceManager {
 
         info!(
             "成功加入频道，RTP 服务器: {}:{}, SSRC: {}",
-            connection_info.ip,
-            connection_info.port,
-            connection_info.ssrc
+            connection_info.ip, connection_info.port, connection_info.ssrc
         );
 
         // 创建音频流处理器
@@ -81,8 +77,7 @@ impl VoiceManager {
     }
 
     /// 离开语音频道
-    pub async fn leave_channel(&mut self,
-    ) -> Result<()> {
+    pub async fn leave_channel(&mut self) -> Result<()> {
         // 停止音频流
         if let Some(ref streamer) = self.audio_streamer {
             let mut streamer = streamer.lock().await;
@@ -104,9 +99,7 @@ impl VoiceManager {
     }
 
     /// 播放音频文件
-    pub async fn play_file(&mut self,
-        file_path: impl AsRef<Path>,
-    ) -> Result<()> {
+    pub async fn play_file(&mut self, file_path: impl AsRef<Path>) -> Result<()> {
         let file_path = file_path.as_ref();
 
         // 确保已经在语音频道
@@ -115,7 +108,9 @@ impl VoiceManager {
         }
 
         // 确保有音频流处理器
-        let streamer = self.audio_streamer.as_ref()
+        let streamer = self
+            .audio_streamer
+            .as_ref()
             .ok_or(BotError::StreamNotStarted)?;
 
         info!("开始播放文件: {:?}", file_path);

@@ -1,14 +1,19 @@
 use crate::config::BotConfig;
 use crate::error::{BotError, Result};
 use crate::models::{JoinedChannel, KookResponse, User, VoiceConnectionInfo};
-use reqwest::{Client, Method, StatusCode};
+use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Kook API 基础 URL
 const KOOK_API_BASE: &str = "https://www.kookapp.cn/api/v3";
+
+/// Gateway 响应
+#[derive(Debug, serde::Deserialize)]
+struct GatewayResponse {
+    url: String,
+}
 
 /// Kook API 客户端
 #[derive(Debug, Clone)]
@@ -59,12 +64,10 @@ impl KookClient {
         if !status.is_success() {
             let text = response.text().await?;
             error!("API 请求失败: {} - {}", status, text);
-            return Err(BotError::HttpError(
-                reqwest::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("HTTP {}: {}", status, text),
-                ))
-            ));
+            return Err(BotError::KookApiError {
+                code: status.as_u16() as i32,
+                message: format!("HTTP {}: {}", status, text),
+            });
         }
 
         let api_response: KookResponse<T> = response.json().await?;
@@ -87,6 +90,17 @@ impl KookClient {
     /// 获取当前登录用户信息
     pub async fn get_current_user(&self) -> Result<User> {
         self.request(Method::GET, "/user/me", None).await
+    }
+
+    /// 获取 Gateway URL
+    pub async fn get_gateway_url(&self) -> Result<String> {
+        #[derive(serde::Deserialize)]
+        struct GatewayData {
+            url: String,
+        }
+
+        let data: GatewayData = self.request(Method::GET, "/gateway/index", None).await?;
+        Ok(data.url)
     }
 
     /// 加入语音频道

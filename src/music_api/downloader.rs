@@ -1,5 +1,6 @@
 use crate::error::{BotError, Result};
 use crate::models::Music;
+use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -70,12 +71,10 @@ impl MusicDownloader {
 
         let status = response.status();
         if !status.is_success() {
-            return Err(BotError::HttpError(
-                reqwest::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("HTTP error: {}", status)
-                ))
-            ));
+            return Err(BotError::KookApiError {
+                code: status.as_u16() as i32,
+                message: format!("HTTP error: {}", status),
+            });
         }
 
         // 获取总大小

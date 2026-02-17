@@ -1,8 +1,7 @@
 use crate::error::{BotError, Result};
 use crate::models::Music;
 use rand::seq::SliceRandom;
-use std::collections::VecDeque;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// 播放模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +71,11 @@ impl Playlist {
             self.shuffle_remaining();
         }
 
-        debug!("添加歌曲到播放列表: 索引={}, 当前共 {} 首", index, self.original_list.len());
+        debug!(
+            "添加歌曲到播放列表: 索引={}, 当前共 {} 首",
+            index,
+            self.original_list.len()
+        );
         index
     }
 
@@ -149,14 +152,17 @@ impl Playlist {
             }
             PlayMode::RepeatOne => {
                 // 单曲循环：返回当前歌曲
-                self.current().or_else(|| {
-                    if !self.play_order.is_empty() {
-                        self.current_position = Some(0);
-                        let idx = self.play_order[0];
-                        return self.original_list.get(idx);
-                    }
-                    None
-                })
+                if let Some(pos) = self.current_position {
+                    let idx = self.play_order[pos];
+                    return self.original_list.get(idx);
+                }
+                // 没有当前歌曲，尝试返回第一首
+                if !self.play_order.is_empty() {
+                    self.current_position = Some(0);
+                    let idx = self.play_order[0];
+                    return self.original_list.get(idx);
+                }
+                None
             }
             PlayMode::RepeatAll => {
                 if let Some(pos) = self.current_position {
@@ -191,9 +197,9 @@ impl Playlist {
     /// 获取当前歌曲
     pub fn current(&self) -> Option<&Music> {
         self.current_position.and_then(|pos| {
-            self.play_order.get(pos).and_then(|&idx| {
-                self.original_list.get(idx)
-            })
+            self.play_order
+                .get(pos)
+                .and_then(|&idx| self.original_list.get(idx))
         })
     }
 

@@ -4,11 +4,30 @@ use std::path::PathBuf;
 
 use crate::error::{BotError, Result};
 
+/// 连接模式
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionMode {
+    /// WebSocket 模式（默认）
+    Websocket,
+    /// Webhook 模式
+    Webhook,
+}
+
+impl Default for ConnectionMode {
+    fn default() -> Self {
+        ConnectionMode::Websocket
+    }
+}
+
 /// Bot 配置
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BotConfig {
     /// Kook Bot Token
     pub token: String,
+    /// 连接模式：websocket 或 webhook
+    #[serde(default)]
+    pub mode: ConnectionMode,
     /// 命令前缀
     #[serde(default = "default_prefix")]
     pub prefix: String,
@@ -21,6 +40,53 @@ pub struct BotConfig {
     /// 网络配置
     #[serde(default)]
     pub network: NetworkConfig,
+    /// Webhook 配置（仅在 webhook 模式下使用）
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+}
+
+/// Webhook 配置
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebhookConfig {
+    /// 监听地址
+    #[serde(default = "default_webhook_host")]
+    pub host: String,
+    /// 监听端口
+    #[serde(default = "default_webhook_port")]
+    pub port: u16,
+    /// 回调路径
+    #[serde(default = "default_webhook_path")]
+    pub path: String,
+    /// 验证令牌
+    #[serde(default)]
+    pub verify_token: String,
+    /// 是否启用 SSL
+    #[serde(default)]
+    pub use_ssl: bool,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            host: default_webhook_host(),
+            port: default_webhook_port(),
+            path: default_webhook_path(),
+            verify_token: String::new(),
+            use_ssl: false,
+        }
+    }
+}
+
+fn default_webhook_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_webhook_port() -> u16 {
+    8080
+}
+
+fn default_webhook_path() -> String {
+    "/webhook".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -133,10 +199,12 @@ impl BotConfig {
     pub fn create_example() -> Self {
         Self {
             token: "你的 Kook Bot Token".to_string(),
+            mode: ConnectionMode::Websocket,
             prefix: "!".to_string(),
             admins: vec!["你的用户ID".to_string()],
             audio: AudioConfig::default(),
             network: NetworkConfig::default(),
+            webhook: WebhookConfig::default(),
         }
     }
 }
