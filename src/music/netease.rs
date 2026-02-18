@@ -1,19 +1,25 @@
 use crate::error::{BotError, Result};
 use crate::player::Music;
-use reqwest::{Client, Method};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use reqwest::Client;
+use serde::Deserialize;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
+use regex::Regex;
 
 /// 网易云音乐 API 客户端
 pub struct NeteaseClient {
     http: Client,
-    cookie: Option<String>,
     base_url: String,
+    cookie: Option<String>,
 }
 
-/// 网易云歌曲信息
+#[derive(Debug, Clone, Deserialize)]
+struct NeteaseResponse<T> {
+    code: i32,
+    #[serde(default)]
+    data: Option<T>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct NeteaseSong {
     pub id: u64,
@@ -22,7 +28,7 @@ pub struct NeteaseSong {
     pub artists: Vec<NeteaseArtist>,
     #[serde(alias = "al")]
     pub album: NeteaseAlbum,
-    #[serde(alias = "dt")]
+    #[serde(alias = "dt", default)]
     pub duration: u64,
 }
 
@@ -36,178 +42,389 @@ pub struct NeteaseArtist {
 pub struct NeteaseAlbum {
     pub id: u64,
     pub name: String,
-    #[serde(alias = "picUrl")]
-    pub pic_url: Option<String>,
-}
-
-/// 网易云歌单信息
-#[derive(Debug, Clone, Deserialize)]
-pub struct NeteasePlaylist {
-    pub id: u64,
-    pub name: String,
-    pub description: Option<String>,
-    #[serde(alias = "coverImgUrl")]
-    pub cover_url: Option<String>,
-    #[serde(alias = "trackCount")]
-    pub track_count: u32,
-    #[serde(alias = "playCount")]
-    pub play_count: u64,
-    pub tracks: Option<Vec<NeteaseSong>>,
-}
-
-/// 搜索响应
-#[derive(Debug, Clone, Deserialize)]
-struct SearchResponse {
-    code: i32,
-    result: Option<SearchResult>,
+    #[serde(alias = "picUrl", default)]
+    pub pic_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct SearchResult {
-    songs: Option<Vec<NeteaseSong>>,
-    #[serde(alias = "songCount")]
-    song_count: Option<u32>,
-    playlists: Option<Vec<NeteasePlaylist>>,
-    #[serde(alias = "playlistCount")]
-    playlist_count: Option<u32>,
-}
-
-/// 歌曲 URL 响应
-#[derive(Debug, Clone, Deserialize)]
-struct SongUrlResponse {
-    code: i32,
-    data: Option<Vec<SongUrl>>,
+    #[serde(alias = "songs", default)]
+    songs: Vec<NeteaseSong>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct SongUrl {
-    id: u64,
+struct SongUrlData {
+    #[serde(default)]
     url: Option<String>,
-    #[serde(alias = "br")]
-    bitrate: Option<u32>,
-    #[serde(alias = "size")]
-    size: Option<u64>,
+    #[serde(alias = "br", default)]
+    bitrate: u32,
 }
 
-/// 歌单详情响应
 #[derive(Debug, Clone, Deserialize)]
-struct PlaylistDetailResponse {
-    code: i32,
-    playlist: Option<NeteasePlaylist>,
+pub struct QrKeyData {
+    pub unikey: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QrCodeData {
+    pub qrurl: String,
+    #[serde(default)]
+    pub qrimg: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoginResult {
+    pub code: i32,
+    pub cookie: Option<String>,
+    pub nickname: Option<String>,
 }
 
 impl NeteaseClient {
-    /// 创建新的网易云 API 客户端
-    pub fn new() -> Self {
-        let http = reqwest::Client::builder()
+    pub fn new(base_url: &str) -> Self {
+        let http = Client::builder()
             .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10))
             .build()
             .expect("创建 HTTP 客户端失败");
 
         Self {
             http,
+            base_url: base_url.to_string(),
             cookie: None,
-            base_url: "https://neteasecloudmusicapi.vercel.app".to_string(),
         }
     }
-
-    /// 使用 Cookie 创建（用于访问 VIP 歌曲）
-    pub fn with_cookie(cookie: impl Into<String>) -> Self {
-        let mut client = Self::new();
-        client.cookie = Some(cookie.into());
+    
+    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Self {
+        let mut client = Self::new(base_url);
+        client.cookie = cookie;
         client
     }
+    
+    pub fn set_cookie(&mut self, cookie: String) {
+        self.cookie = Some(cookie);
+    }
+    
+    pub fn has_cookie(&self) -> bool {
+        self.cookie.is_some()
+    }
 
-    /// 设置 API 基础 URL（用于自建 API）
-    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
-        self
+    /// 获取登录二维码 key
+    pub async fn get_qr_key(&self) -> Result<QrKeyData> {
+        let url = format!("{}/login/qr/key", self.base_url);
+        
+        let response = self.http.get(&url).send().await?;
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
+            return Err(BotError::KookApiError {
+                code: code as i32,
+                message: "获取二维码key失败".to_string(),
+            });
+        }
+        
+        let data = json.get("data").ok_or_else(|| BotError::KookApiError {
+            code: -1,
+            message: "响应数据为空".to_string(),
+        })?;
+        
+        serde_json::from_value(data.clone())
+            .map_err(|e| BotError::KookApiError {
+                code: -1,
+                message: format!("解析二维码key失败: {}", e),
+            })
+    }
+    
+    /// 生成二维码
+    pub async fn create_qr_code(&self, key: &str) -> Result<QrCodeData> {
+        let url = format!("{}/login/qr/create", self.base_url);
+        
+        let response = self.http
+            .get(&url)
+            .query(&[
+                ("key", key),
+                ("qrimg", "true"),
+            ])
+            .send()
+            .await?;
+        
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
+            return Err(BotError::KookApiError {
+                code: code as i32,
+                message: "生成二维码失败".to_string(),
+            });
+        }
+        
+        let data = json.get("data").ok_or_else(|| BotError::KookApiError {
+            code: -1,
+            message: "响应数据为空".to_string(),
+        })?;
+        
+        serde_json::from_value(data.clone())
+            .map_err(|e| BotError::KookApiError {
+                code: -1,
+                message: format!("解析二维码失败: {}", e),
+            })
+    }
+    
+    /// 检查二维码登录状态
+    /// 
+    /// 返回码说明:
+    /// - 800: 二维码已过期
+    /// - 801: 等待扫码
+    /// - 802: 待确认
+    /// - 803: 授权登录成功
+    pub async fn check_qr_status(&self, key: &str) -> Result<LoginResult> {
+        let url = format!("{}/login/qr/check", self.base_url);
+        
+        let response = self.http
+            .get(&url)
+            .query(&[("key", key)])
+            .send()
+            .await?;
+        
+        let json: serde_json::Value = response.json().await?;
+        
+        info!("二维码状态响应: {}", json);
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        
+        let cookie = if code == 803 {
+            // 登录成功，从响应中获取 cookie
+            json.get("cookie")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        };
+        
+        let nickname = json.get("nickname")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string());
+        
+        Ok(LoginResult {
+            code: code as i32,
+            cookie,
+            nickname,
+        })
+    }
+
+    /// 解析网易云音乐分享链接，提取歌曲ID
+    pub fn parse_song_id(input: &str) -> Option<u64> {
+        // 尝试直接解析为数字ID
+        if let Ok(id) = input.parse::<u64>() {
+            return Some(id);
+        }
+
+        // 匹配各种分享链接格式
+        let patterns = [
+            // music.163.com/#/song?id=xxx
+            r"music\.163\.com/(?:#/)?song\?id=(\d+)",
+            // music.163.com/song/media/outer/url?id=xxx
+            r"music\.163\.com/song/media/outer/url\?id=(\d+)",
+            // y.music.163.com/m/song?appid=...&id=xxx
+            r"y\.music\.163\.com/m/song[^\d]*(\d+)",
+            // 分享链接: https://share.music.163.com/xxx?songId=xxx
+            r"songId[=:](\d+)",
+            // 短链接中的ID
+            r"id[=:](\d+)",
+        ];
+
+        for pattern in &patterns {
+            if let Ok(re) = Regex::new(pattern) {
+                if let Some(caps) = re.captures(input) {
+                    if let Some(m) = caps.get(1) {
+                        if let Ok(id) = m.as_str().parse::<u64>() {
+                            return Some(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// 搜索歌曲
-    pub async fn search_songs(
-        &self,
-        keyword: &str,
-        limit: u32,
-    ) -> Result<Vec<NeteaseSong>> {
-        let url = format!("{}/search", self.base_url);
+    pub async fn search(&self, keyword: &str, limit: u32) -> Result<Vec<NeteaseSong>> {
+        let url = format!("{}/cloudsearch", self.base_url);
+        
+        let response = self.http
+            .get(&url)
+            .query(&[
+                ("keywords", keyword),
+                ("type", "1"),
+                ("limit", &limit.to_string()),
+            ])
+            .send()
+            .await?;
 
-        let params = vec![
-            ("keywords".to_string(), keyword.to_string()),
-            ("type".to_string(), "1".to_string()), // 1 = 单曲
-            ("limit".to_string(), limit.to_string()),
-        ];
-
-        let response = self.send_request::<SearchResponse>(Method::GET, &url, Some(params)).await?;
-
-        if response.code != 200 {
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
             return Err(BotError::KookApiError {
-                code: response.code,
-                message: "搜索歌曲失败".to_string(),
+                code: code as i32,
+                message: "搜索失败".to_string(),
             });
         }
 
-        let songs = response.result
-            .and_then(|r| r.songs)
+        let songs: Vec<NeteaseSong> = json
+            .get("result")
+            .and_then(|r| r.get("songs"))
+            .and_then(|s| serde_json::from_value(s.clone()).ok())
             .unwrap_or_default();
 
         info!("搜索 \"{}\" 找到 {} 首歌曲", keyword, songs.len());
         Ok(songs)
     }
 
-    /// 获取歌曲 URL
-    pub async fn get_song_url(
-        &self,
-        song_id: u64,
-        bitrate: u32,
-    ) -> Result<Option<String>> {
+    /// 获取歌曲详情
+    pub async fn get_song_detail(&self, song_id: u64) -> Result<NeteaseSong> {
+        let url = format!("{}/song/detail", self.base_url);
+        
+        let response = self.http
+            .get(&url)
+            .query(&[("ids", &song_id.to_string())])
+            .send()
+            .await?;
+
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
+            return Err(BotError::KookApiError {
+                code: code as i32,
+                message: "获取歌曲详情失败".to_string(),
+            });
+        }
+
+        let song = json
+            .get("songs")
+            .and_then(|s| s.as_array())
+            .and_then(|arr| arr.first())
+            .ok_or_else(|| BotError::KookApiError {
+                code: 404,
+                message: "歌曲不存在".to_string(),
+            })?;
+
+        serde_json::from_value(song.clone())
+            .map_err(|e| BotError::KookApiError {
+                code: -1,
+                message: format!("解析歌曲详情失败: {}", e),
+            })
+    }
+
+    /// 添加 cookie 到请求头
+    fn add_cookie(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref cookie) = self.cookie {
+            request.header("Cookie", cookie)
+        } else {
+            request
+        }
+    }
+
+    /// 获取歌曲下载URL
+    pub async fn get_song_url(&self, song_id: u64) -> Result<Option<String>> {
         let url = format!("{}/song/url", self.base_url);
+        let song_id_str = song_id.to_string();
+        let br = "320000".to_string();
+        
+        let request = self.http
+            .get(&url)
+            .query(&[
+                ("id", &song_id_str),
+                ("br", &br),
+            ]);
+        
+        let response = self.add_cookie(request).send().await?;
 
-        let params = vec![
-            ("id".to_string(), song_id.to_string()),
-            ("br".to_string(), bitrate.to_string()),
-        ];
-
-        let response = self.send_request::<SongUrlResponse>(Method::GET, &url, Some(params)).await?;
-
-        if response.code != 200 {
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
             return Err(BotError::KookApiError {
-                code: response.code,
-                message: "获取歌曲 URL 失败".to_string(),
+                code: code as i32,
+                message: "获取歌曲URL失败".to_string(),
             });
         }
 
-        let song_url = response.data
-            .and_then(|data| data.into_iter().next())
-            .and_then(|song| song.url);
+        let url = json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|d| d.get("url"))
+            .and_then(|u| u.as_str())
+            .map(|s| s.to_string());
 
-        Ok(song_url)
+        Ok(url)
     }
 
-    /// 获取歌单详情
-    pub async fn get_playlist(&self, playlist_id: u64) -> Result<NeteasePlaylist> {
-        let url = format!("{}/playlist/detail", self.base_url);
+    /// 获取歌曲下载URL (V2备用接口)
+    pub async fn get_song_url_v2(&self, song_id: u64) -> Result<Option<String>> {
+        let url = format!("{}/song/url/v1", self.base_url);
+        let song_id_str = song_id.to_string();
+        let level = "exhigh".to_string();
+        
+        let request = self.http
+            .get(&url)
+            .query(&[
+                ("id", &song_id_str),
+                ("level", &level),
+            ]);
+        
+        let response = self.add_cookie(request).send().await?;
 
-        let params = vec![
-            ("id".to_string(), playlist_id.to_string()),
-        ];
-
-        let response = self.send_request::<PlaylistDetailResponse>(Method::GET, &url, Some(params)).await?;
-
-        if response.code != 200 {
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
             return Err(BotError::KookApiError {
-                code: response.code,
-                message: "获取歌单详情失败".to_string(),
+                code: code as i32,
+                message: "获取歌曲URL(V2)失败".to_string(),
             });
         }
 
-        response.playlist.ok_or_else(|| BotError::ConfigError("歌单不存在".to_string()))
+        let url = json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|d| d.get("url"))
+            .and_then(|u| u.as_str())
+            .map(|s| s.to_string());
+
+        Ok(url)
     }
 
-    /// 将 NeteaseSong 转换为 Music
+    /// 搜索或通过ID获取歌曲
+    pub async fn get_or_search(&self, input: &str) -> Result<(NeteaseSong, Option<String>)> {
+        // 尝试解析为歌曲ID
+        if let Some(song_id) = Self::parse_song_id(input) {
+            info!("解析到歌曲ID: {}", song_id);
+            let song = self.get_song_detail(song_id).await?;
+            let url = self.get_song_url(song_id).await?;
+            return Ok((song, url));
+        }
+
+        // 搜索歌曲
+        let songs = self.search(input, 1).await?;
+        if songs.is_empty() {
+            return Err(BotError::KookApiError {
+                code: 404,
+                message: format!("未找到歌曲: {}", input),
+            });
+        }
+
+        let song = songs.into_iter().next().unwrap();
+        let url = self.get_song_url(song.id).await?;
+        Ok((song, url))
+    }
+
+    /// 转换为 Music 结构
     pub fn to_music(&self, song: &NeteaseSong) -> Music {
-        let artist_name = song.artists
+        let author = song.artists
             .iter()
             .map(|a| a.name.as_str())
             .collect::<Vec<_>>()
@@ -215,48 +432,15 @@ impl NeteaseClient {
 
         Music {
             title: song.name.clone(),
-            author: artist_name,
-            pic_url: song.album.pic_url.clone()
-                .unwrap_or_else(|| "https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg".to_string()),
-            platform: "网易云音乐".to_string(),
+            author,
+            pic_url: if song.album.pic_url.is_empty() {
+                "https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg".to_string()
+            } else {
+                song.album.pic_url.clone()
+            },
+            platform: "网易云".to_string(),
             source_url: Some(format!("https://music.163.com/#/song?id={}", song.id)),
-            duration: Some(song.duration / 1000), // 毫秒转秒
+            duration: Some(song.duration / 1000),
         }
-    }
-
-    /// 发送 HTTP 请求
-    async fn send_request<T: for<'de> serde::Deserialize<'de>>(
-        &self,
-        method: Method,
-        url: &str,
-        params: Option<Vec<(String, String)>>,
-    ) -> Result<T> {
-        let mut request = self.http.request(method, url);
-
-        // 添加 Cookie
-        if let Some(cookie) = &self.cookie {
-            request = request.header("Cookie", cookie);
-        }
-
-        // 添加参数
-        if let Some(params) = params {
-            request = request.query(&params);
-        }
-
-        let response = request.send().await
-            .map_err(|e| BotError::HttpError(e))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(BotError::KookApiError {
-                code: status.as_u16() as i32,
-                message: format!("HTTP error: {}", status),
-            });
-        }
-
-        let data: T = response.json().await
-            .map_err(|e| BotError::HttpError(e))?;
-
-        Ok(data)
     }
 }

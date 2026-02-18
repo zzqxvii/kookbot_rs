@@ -12,7 +12,9 @@ use kook_music_bot::api::{Channel, KookClient};
 use kook_music_bot::config::{BotConfig, ConnectionMode};
 use kook_music_bot::webhook::{WebhookHandler, WebhookServer};
 use kook_music_bot::gateway::{EventHandler, GatewayClient, MessageData};
-use kook_music_bot::player::VoiceManager;
+use kook_music_bot::player::{VoiceManager, VoiceStreamingInfo};
+use kook_music_bot::music::NeteaseClient;
+use kook_music_bot::audio::{FFmpegDirectStreamer, StreamerConfig};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -75,6 +77,40 @@ struct Cli {
     config: Option<PathBuf>,
     #[arg(short, long, default_value = "info")]
     log_level: String,
+}
+
+fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> anyhow::Result<()> {
+    use std::fs;
+    
+    let content = fs::read_to_string(config_path)?;
+    let mut updated = false;
+    let mut new_lines = Vec::new();
+    
+    for line in content.lines() {
+        if line.starts_with("netease_cookie") {
+            new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+            updated = true;
+        } else if line.starts_with("[music]") && !updated {
+            // 如果 [music] section 存在但没有 netease_cookie 行，在后面添加
+            new_lines.push(line.to_string());
+            new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+            updated = true;
+            continue;
+        } else {
+            new_lines.push(line.to_string());
+        }
+    }
+    
+    if !updated {
+        // 如果没有找到 [music] section，在文件末尾添加
+        new_lines.push(String::new());
+        new_lines.push("[music]".to_string());
+        new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+    }
+    
+    fs::write(config_path, new_lines.join("\n"))?;
+    info!("Cookie 已保存到 {:?}", config_path);
+    Ok(())
 }
 
 #[tokio::main]
@@ -315,7 +351,7 @@ async fn start_websocket_mode(config: BotConfig, api_client: KookClient) -> Resu
     info!("✓ Gateway 地址: {}", gateway_url);
 
     let token = config.token.clone();
-    let client = GatewayClient::with_basic_intents(&token);
+    let client = GatewayClient::with_all_intents(&token);
 
     let handler = BotEventHandler::new(config, api_client);
     client.set_event_handler(Box::new(handler)).await;
@@ -496,13 +532,21 @@ impl WebhookHandler for BotWebhookHandler {
 struct BotEventHandler {
     config: BotConfig,
     api_client: Arc<RwLock<Option<KookClient>>>,
+    netease_client: NeteaseClient,
+    voice_manager: Arc<Mutex<Option<VoiceManager>>>,
 }
 
 impl BotEventHandler {
     fn new(config: BotConfig, api_client: KookClient) -> Self {
+        let netease_client = NeteaseClient::with_cookie(
+            &config.music.netease_api_url,
+            config.music.netease_cookie.clone(),
+        );
         Self {
             config,
             api_client: Arc::new(RwLock::new(Some(api_client))),
+            netease_client,
+            voice_manager: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -553,6 +597,15 @@ impl BotEventHandler {
                 "join" | "j" => {
                     self.handle_join(&data).await;
                 }
+                "leave" | "l" => {
+                    self.handle_leave(&data).await;
+                }
+                "wyy" => {
+                    self.handle_wyy(&data, args).await;
+                }
+                "wyylogin" => {
+                    self.handle_wyylogin(&data).await;
+                }
                 _ => {
                     debug!("[WebSocket] 未知命令: {}", cmd);
                 }
@@ -592,7 +645,7 @@ impl BotEventHandler {
                 if let Some(client) = self.api_client.read().await.as_ref() {
                     match client.join_voice_channel(&vc.id).await {
                         Ok(conn_info) => {
-                            info!("成功加入语音频道: {}:{}", conn_info.ip, conn_info.port);
+                            info!("成功加入语音频道: {}:{}", conn_info.ip(), conn_info.port());
                             
                             if args.is_empty() {
                                 let _ = client.send_channel_message(channel_id, 
@@ -651,7 +704,7 @@ impl BotEventHandler {
                 if let Some(client) = self.api_client.read().await.as_ref() {
                     match client.join_voice_channel(&vc.id).await {
                         Ok(conn_info) => {
-                            info!("成功加入语音频道: {}:{}", conn_info.ip, conn_info.port);
+                            info!("成功加入语音频道: {}:{}", conn_info.ip(), conn_info.port());
                             let _ = client.send_channel_message(channel_id, 
                                 &format!("✅ 已加入语音频道 **{}**", vc.name)).await;
                         }
@@ -672,16 +725,362 @@ impl BotEventHandler {
         }
     }
 
+    async fn handle_leave(&self, data: &MessageData) {
+        let channel_id = &data.target_id;
+        
+        let mut vm = self.voice_manager.lock().await;
+        if let Some(ref mut voice_manager) = *vm {
+            match voice_manager.leave_channel().await {
+                Ok(_) => {
+                    if let Some(client) = self.api_client.read().await.as_ref() {
+                        let _ = client.send_channel_message(channel_id, "✅ 已离开语音频道").await;
+                    }
+                }
+                Err(e) => {
+                    if let Some(client) = self.api_client.read().await.as_ref() {
+                        let _ = client.send_channel_message(channel_id, 
+                            &format!("❌ 离开语音频道失败: {}", e)).await;
+                    }
+                }
+            }
+        } else {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(channel_id, "⚠️ 当前不在任何语音频道中").await;
+            }
+        }
+    }
+
+    async fn handle_wyy(&self, data: &MessageData, args: Vec<&str>) {
+        let guild_id = &data.extra.guild_id;
+        let user_id = &data.author_id;
+        let channel_id = &data.target_id;
+
+        if args.is_empty() {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(channel_id, 
+                    "❌ 请提供歌曲链接或搜索关键词\n用法: `/wyy <歌曲链接或关键词>`").await;
+            }
+            return;
+        }
+
+        let query = args.join(" ");
+        info!("处理 /wyy 命令: {}", query);
+
+        let voice_channel = {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                match client.get_user_voice_channel(guild_id, user_id).await {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        error!("获取用户语音频道失败: {}", e);
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("❌ 获取语音频道信息失败: {}", e)).await;
+                        }
+                        return;
+                    }
+                }
+            } else {
+                return;
+            }
+        };
+
+        let vc = match voice_channel {
+            Some(vc) => vc,
+            None => {
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        "⚠️ 你当前不在任何语音频道中\n请先加入一个语音频道").await;
+                }
+                return;
+            }
+        };
+
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            let _ = client.send_channel_message(channel_id, 
+                &format!("🔍 正在搜索: **{}**", query)).await;
+        }
+
+        match self.netease_client.get_or_search(&query).await {
+            Ok((song, url)) => {
+                let music = self.netease_client.to_music(&song);
+                
+                match url {
+                    Some(audio_url) => {
+                        info!("获取到歌曲URL: {}", audio_url);
+                        
+                        if let Some(api_client) = self.api_client.read().await.as_ref() {
+                            let mut conn_info = None;
+                            
+                            // 尝试加入语音频道
+                            match api_client.join_voice_channel(&vc.id).await {
+                                Ok(info) => conn_info = Some(info),
+                                Err(e) => {
+                                    // 如果失败，尝试先离开再加入
+                                    warn!("加入语音失败 ({})，尝试先离开...", e);
+                                    let _ = api_client.leave_voice_channel(&vc.id).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                                    conn_info = api_client.join_voice_channel(&vc.id).await.ok();
+                                }
+                            }
+                            
+                            if let Some(conn_info) = conn_info {
+                                let ip = conn_info.ip.clone().unwrap_or_default();
+                                let port = conn_info.port.unwrap_or(0);
+                                info!("成功加入语音频道: {}:{}", ip, port);
+                                
+                                let bit_rate = conn_info.bitrate.unwrap_or(self.config.audio.bit_rate);
+                                info!("使用比特率: {}kbps", bit_rate / 1000);
+                                
+                                let streaming_info = VoiceStreamingInfo {
+                                    ip: ip.clone(),
+                                    port: port as u16,
+                                    rtcp_port: conn_info.rtcp_port.map(|p| p as u16).unwrap_or(port as u16 + 1),
+                                    rtcp_mux: conn_info.rtcp_mux.unwrap_or(true),
+                                    ssrc: conn_info.audio_ssrc.map(|s| s as u32).unwrap_or(1111),
+                                    pt: conn_info.audio_pt.map(|p| p as u8).unwrap_or(111),
+                                    bit_rate,
+                                    sample_rate: 48000,
+                                    channels: 2,
+                                };
+
+                                let mut streamer = FFmpegDirectStreamer::new(
+                                    StreamerConfig::from(&streaming_info)
+                                ).unwrap();
+                                
+                                if let Some(api_client) = self.api_client.read().await.as_ref() {
+                                    let _ = api_client.send_channel_message(channel_id, 
+                                        &format!("🎵 正在播放: **{}** - {}", music.title, music.author)).await;
+                                }
+
+                                match streamer.start_stream_url(&audio_url, &ip, port as u16, streaming_info.rtcp_port) {
+                                    Ok(_) => {
+                                        let _ = streamer.wait();
+                                    }
+                                    Err(e) => {
+                                        error!("推流失败: {}", e);
+                                        if let Some(api_client) = self.api_client.read().await.as_ref() {
+                                            let _ = api_client.send_channel_message(channel_id, 
+                                                &format!("❌ 推流失败: {}", e)).await;
+                                        }
+                                    }
+                                }
+                            } else {
+                                let _ = api_client.send_channel_message(channel_id, 
+                                    "❌ 加入语音频道失败，请稍后重试").await;
+                            }
+                        }
+                    }
+                    None => {
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("❌ 无法获取 **{}** 的播放链接\n可能需要 VIP 或歌曲已下架", song.name)).await;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!("搜索失败: {}", e);
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        &format!("❌ 搜索失败: {}", e)).await;
+                }
+            }
+        }
+    }
+
+    /// 生成二维码图片并上传到 Kook
+    async fn generate_and_upload_qrcode(&self, url: &str) -> Option<String> {
+        use qrcode::QrCode;
+        use image::Luma;
+        
+        let code = match QrCode::new(url) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("生成二维码失败: {}", e);
+                return None;
+            }
+        };
+        
+        let image = code.render::<Luma<u8>>().build();
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        
+        if let Err(e) = image.write_to(&mut buffer, image::ImageFormat::Png) {
+            warn!("编码二维码图片失败: {}", e);
+            return None;
+        }
+        
+        let image_data = buffer.into_inner();
+        
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            match client.upload_image(&image_data).await {
+                Ok(kook_url) => {
+                    info!("二维码上传成功: {}", kook_url);
+                    return Some(kook_url);
+                }
+                Err(e) => {
+                    warn!("上传二维码图片失败: {}", e);
+                }
+            }
+        }
+        
+        None
+    }
+
+    async fn handle_wyylogin(&self, data: &MessageData) {
+        let channel_id = &data.target_id;
+        
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            let _ = client.send_channel_message(channel_id, 
+                "🔑 正在生成网易云登录二维码...").await;
+        }
+        
+        // 获取二维码 key
+        let key = match self.netease_client.get_qr_key().await {
+            Ok(key_data) => key_data.unikey,
+            Err(e) => {
+                error!("获取二维码key失败: {}", e);
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        &format!("❌ 获取二维码失败: {}", e)).await;
+                }
+                return;
+            }
+        };
+        
+        // 生成二维码
+        let qr_code = match self.netease_client.create_qr_code(&key).await {
+            Ok(qr) => qr,
+            Err(e) => {
+                error!("生成二维码失败: {}", e);
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        &format!("❌ 生成二维码失败: {}", e)).await;
+                }
+                return;
+            }
+        };
+        
+        // 本地生成二维码图片并上传到 Kook
+        info!("开始生成并上传二维码图片...");
+        let image_url = self.generate_and_upload_qrcode(&qr_code.qrurl).await;
+        info!("二维码上传结果: {:?}", image_url);
+        
+        // 发送二维码
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            if let Some(ref url) = image_url {
+                info!("发送图片消息: {}", url);
+                let _ = client.send_image_message(channel_id, url).await;
+                let _ = client.send_channel_message(channel_id, 
+                    "📱 **请扫描上方二维码登录网易云音乐**\n⏰ 二维码有效期 5 分钟").await;
+            } else {
+                warn!("二维码上传失败，发送链接");
+                let _ = client.send_channel_message(channel_id, 
+                    &format!(
+                        "📱 **网易云登录**\n\n点击链接扫码：{}\n\n⏰ 二维码有效期 5 分钟",
+                        qr_code.qrurl
+                    )).await;
+            }
+        }
+        
+        // 轮询检查登录状态
+        let key_clone = key.clone();
+        let channel_id_clone = channel_id.to_string();
+        let api_client = self.api_client.clone();
+        let netease_api_url = self.config.music.netease_api_url.clone();
+        
+        tokio::spawn(async move {
+            let netease_client = NeteaseClient::new(&netease_api_url);
+            let config_path = std::path::PathBuf::from("config.toml");
+            let mut attempts = 0;
+            let max_attempts = 60;
+            let key_str = key_clone.clone();
+            info!("启动登录检查任务，key: {}", key_str);
+            
+            loop {
+                attempts += 1;
+                info!("检查登录状态... ({}/{}), key: {}", attempts, max_attempts, key_str);
+                
+                if attempts > max_attempts {
+                    if let Some(client) = api_client.read().await.as_ref() {
+                        let _ = client.send_channel_message(&channel_id_clone, 
+                            "⏰ 二维码已过期，请重新发送 `/wyylogin`").await;
+                    }
+                    break;
+                }
+                
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                
+                match netease_client.check_qr_status(&key_clone).await {
+                    Ok(result) => {
+                        info!("登录状态码: {}", result.code);
+                        match result.code {
+                            800 => {
+                                if let Some(client) = api_client.read().await.as_ref() {
+                                    let _ = client.send_channel_message(&channel_id_clone, 
+                                        "⏰ 二维码已过期，请重新发送 `/wyylogin`").await;
+                                }
+                                break;
+                            }
+                            801 => {
+                                // 等待扫码
+                                info!("等待扫码中...");
+                            }
+                            802 => {
+                                info!("已扫码，等待确认");
+                                if let Some(client) = api_client.read().await.as_ref() {
+                                    let _ = client.send_channel_message(&channel_id_clone, 
+                                        "✅ 已扫描，请在手机上确认登录").await;
+                                }
+                            }
+                            803 => {
+                                info!("登录成功! cookie: {:?}", result.cookie);
+                                if let Some(ref cookie) = result.cookie {
+                                    match update_netease_cookie(&config_path, cookie) {
+                                        Ok(_) => {
+                                            if let Some(client) = api_client.read().await.as_ref() {
+                                                let nickname = result.nickname.as_deref().unwrap_or("用户");
+                                                let _ = client.send_channel_message(&channel_id_clone, 
+                                                    &format!("🎉 登录成功！欢迎 **{}**\nCookie 已保存，请重启机器人后使用 `/wyy` 播放完整音质", nickname)).await;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("保存 cookie 失败: {}", e);
+                                            if let Some(client) = api_client.read().await.as_ref() {
+                                                let _ = client.send_channel_message(&channel_id_clone, 
+                                                    &format!("⚠️ 登录成功，但保存 Cookie 失败: {}", e)).await;
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                            _ => {
+                                warn!("未知的登录状态码: {}", result.code);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("检查登录状态失败: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
     async fn send_help(&self, channel_id: &str) {
-        let content = r#"🎵 **Kook Music Bot (WebSocket)** 🎵
+        let content = r#"🎵 **Kook Music Bot** 🎵
 
 **可用命令：**
 `{}help` - 显示此帮助
 `{}join` - 加入你的语音频道
 `{}leave` - 离开语音频道
-`{}play <关键词>` - 播放音乐
+`{}wyy <链接或关键词>` - 播放网易云音乐
+`{}wyylogin` - 登录网易云账号（获取完整音质）
 
-**连接模式：** WebSocket
+**支持：**
+- 网易云音乐链接/分享链接
+- 歌曲ID
+- 歌曲名称搜索
 "#;
 
         let content = content.replace("{}", &self.config.prefix);

@@ -84,9 +84,8 @@ impl GatewayClient {
         info!("Intents: {}", self.intents);
         info!("========================================");
 
-        let mut heartbeat_tick = interval(Duration::from_millis(1000));
-        let mut need_heartbeat = false;
-        let mut last_heartbeat = std::time::Instant::now();
+        let mut heartbeat_tick = interval(Duration::from_secs(30));
+        let mut need_heartbeat = true;
 
         loop {
             if !*self.running.read().await {
@@ -97,20 +96,13 @@ impl GatewayClient {
             tokio::select! {
                 _ = heartbeat_tick.tick() => {
                     if need_heartbeat {
-                        let interval_ms = *self.heartbeat_interval.read().await;
-                        if last_heartbeat.elapsed().as_millis() as u64 >= interval_ms {
-                            self.send_heartbeat().await;
-                            last_heartbeat = std::time::Instant::now();
-                        }
+                        self.send_heartbeat().await;
                     }
                 }
 
                 message_result = self.receive_message() => {
                     if let Some(msg) = message_result {
                         self.handle_message(msg).await;
-                        if *self.heartbeat_interval.read().await > 0 {
-                            need_heartbeat = true;
-                        }
                     }
                 }
             }

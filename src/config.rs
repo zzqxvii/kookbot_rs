@@ -152,6 +152,8 @@ pub struct MusicConfig {
     pub cache_dir: String,
     #[serde(default = "default_max_cache_size")]
     pub max_cache_size: u64,
+    #[serde(default = "default_netease_api_url")]
+    pub netease_api_url: String,
     pub netease_cookie: Option<String>,
     pub qqmusic_cookie: Option<String>,
     pub bilibili_cookie: Option<String>,
@@ -162,6 +164,7 @@ impl Default for MusicConfig {
         Self {
             cache_dir: default_cache_dir(),
             max_cache_size: default_max_cache_size(),
+            netease_api_url: default_netease_api_url(),
             netease_cookie: None,
             qqmusic_cookie: None,
             bilibili_cookie: None,
@@ -224,7 +227,7 @@ fn default_volume() -> f32 {
     0.5
 }
 fn default_bitrate() -> i32 {
-    64000
+    128000
 }
 fn default_sample_rate() -> u32 {
     48000
@@ -267,6 +270,9 @@ fn default_cache_dir() -> String {
 }
 fn default_max_cache_size() -> u64 {
     1024
+}
+fn default_netease_api_url() -> String {
+    "http://localhost:3000".to_string()
 }
 fn default_max_queue_size() -> usize {
     100

@@ -113,7 +113,17 @@ impl KookClient {
             });
         }
 
-        let api_response: KookResponse<T> = response.json().await?;
+        let raw_text = response.text().await?;
+        debug!("API 原始响应: {}", raw_text);
+        
+        let api_response: KookResponse<T> = serde_json::from_str(&raw_text)
+            .map_err(|e| {
+                error!("解析响应失败: {}, 原始内容: {}", e, raw_text);
+                BotError::KookApiError {
+                    code: -1,
+                    message: format!("解析响应失败: {}", e),
+                }
+            })?;
 
         if api_response.code != 0 {
             return Err(BotError::KookApiError {
@@ -191,7 +201,7 @@ impl KookClient {
 
         info!(
             "成功加入语音频道，RTP 服务器: {}:{}",
-            info.ip, info.port
+            info.ip(), info.port()
         );
         Ok(info)
     }
@@ -264,12 +274,86 @@ impl KookClient {
             .request(Method::POST, "/message/create", Some(body))
             .await?;
 
-        // Kook API 返回 msg_id 字段
         response["msg_id"]
             .as_str()
             .map(|s| s.to_string())
             .ok_or_else(|| {
                 tracing::warn!("发送消息响应: {:?}", response);
+                BotError::KookApiError {
+                    code: -1,
+                    message: format!("无法获取消息 ID: {:?}", response),
+                }
+            })
+    }
+    
+    /// 上传图片到 Kook 服务器
+    /// 
+    /// 返回图片 URL
+    pub async fn upload_image(&self, image_data: &[u8]) -> Result<String> {
+        let url = format!("{}/asset/create", KOOK_API_BASE);
+        
+        let part = reqwest::multipart::Part::bytes(image_data.to_vec())
+            .file_name("qrcode.png")
+            .mime_str("image/png")
+            .map_err(|e| BotError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        
+        let form = reqwest::multipart::Form::new()
+            .part("file", part);
+        
+        let response = self.http
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .multipart(form)
+            .send()
+            .await?;
+        
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await?;
+            return Err(BotError::KookApiError {
+                code: status.as_u16() as i32,
+                message: format!("上传失败: {}", text),
+            });
+        }
+        
+        let json: serde_json::Value = response.json().await?;
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        
+        if code != 0 {
+            return Err(BotError::KookApiError {
+                code: code as i32,
+                message: json.get("message").and_then(|v| v.as_str()).unwrap_or("上传失败").to_string(),
+            });
+        }
+        
+        let url = json.get("data")
+            .and_then(|d| d.get("url"))
+            .and_then(|u| u.as_str())
+            .ok_or_else(|| BotError::KookApiError {
+                code: -1,
+                message: "无法获取图片 URL".to_string(),
+            })?;
+        
+        info!("图片上传成功: {}", url);
+        Ok(url.to_string())
+    }
+    
+    /// 发送图片消息
+    pub async fn send_image_message(&self, channel_id: &str, image_url: &str) -> Result<String> {
+        let body = json!({
+            "target_id": channel_id,
+            "content": image_url,
+            "type": 2, // 图片消息
+        });
+
+        let response: serde_json::Value = self
+            .request(Method::POST, "/message/create", Some(body))
+            .await?;
+
+        response["msg_id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
                 BotError::KookApiError {
                     code: -1,
                     message: format!("无法获取消息 ID: {:?}", response),

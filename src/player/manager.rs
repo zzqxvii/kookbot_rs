@@ -48,7 +48,7 @@ impl VoiceManager {
         let connection_info = self.kook_client.join_voice_channel(channel_id).await?;
 
         // 解析端口
-        let port: u16 = connection_info.port as u16;
+        let port: u16 = connection_info.port.unwrap_or(0) as u16;
         
         let rtcp_port: u16 = connection_info.rtcp_port
             .map(|p| p as u16)
@@ -64,16 +64,18 @@ impl VoiceManager {
             .map(|p| p as u8)
             .unwrap_or(111);
         
-        let bit_rate = connection_info.bitrate.unwrap_or(64000);
+        let bit_rate = connection_info.bitrate.unwrap_or(self.config.audio.bit_rate);
+        
+        let ip = connection_info.ip.clone().unwrap_or_default();
 
         info!(
-            "成功加入频道，RTP 服务器: {}:{}, SSRC: {}, PT: {}",
-            connection_info.ip, port, ssrc, pt
+            "成功加入频道，RTP 服务器: {}:{}, SSRC: {}, PT: {}, 比特率: {}kbps",
+            ip, port, ssrc, pt, bit_rate / 1000
         );
 
         // 创建音频流处理器
         let streaming_info = VoiceStreamingInfo {
-            ip: connection_info.ip.clone(),
+            ip,
             port,
             rtcp_port,
             rtcp_mux,

@@ -13,9 +13,11 @@ pub struct KookResponse<T> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VoiceConnectionInfo {
     /// 媒体服务器的推流ip
-    pub ip: String,
+    #[serde(default)]
+    pub ip: Option<String>,
     /// 媒体服务器的推流端口
-    pub port: i32,
+    #[serde(default)]
+    pub port: Option<i32>,
     /// 媒体服务器的rtcp推流端口
     #[serde(default)]
     pub rtcp_port: Option<i32>,
@@ -31,6 +33,16 @@ pub struct VoiceConnectionInfo {
     /// 传输的语音数据的payload_type
     #[serde(default)]
     pub audio_pt: Option<i32>,
+}
+
+impl VoiceConnectionInfo {
+    pub fn ip(&self) -> &str {
+        self.ip.as_deref().unwrap_or("")
+    }
+
+    pub fn port(&self) -> i32 {
+        self.port.unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -72,9 +72,9 @@ verify_token = "你的验证令牌"
 # 默认音量 (0.0 - 1.0) (默认: 0.5)
 # volume = 0.5
 
-# 比特率 (bps) (默认: 64000)
-# Kook 支持: 16000, 32000, 64000, 96000, 128000
-# bit_rate = 64000
+# 比特率 (bps) (默认: 128000 = 128kbps)
+# 仅当 Kook 服务器未返回比特率时使用
+# bit_rate = 128000
 
 # 采样率 (默认: 48000，Kook 只支持 48000)
 # sample_rate = 48000
@@ -112,6 +112,10 @@ verify_token = "你的验证令牌"
 
 # 最大缓存大小(MB) (默认: 1024)
 # max_cache_size = 1024
+
+# 网易云音乐 API 地址 (默认: http://localhost:3000)
+# 使用 NeteaseCloudMusicApi 项目
+# netease_api_url = "http://localhost:3000"
 
 # 网易云音乐 Cookie (可选，用于更高音质)
 # netease_cookie = "MUSIC_U=..."

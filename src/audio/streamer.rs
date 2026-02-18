@@ -1,5 +1,6 @@
 use crate::audio::decoder::AudioDecoder;
 use crate::audio::ffmpeg_encoder::{FFmpegOpusConfig, FFmpegOpusEncoder};
+use crate::audio::ffmpeg_streamer::{FFmpegDirectStreamer, StreamerConfig};
 use crate::audio::rtp::{RtpSender, RtpStats};
 use crate::config::{AudioConfig, NetworkConfig};
 use crate::error::Result;
@@ -18,12 +19,16 @@ pub struct AudioStreamer {
     rtp_sender: RtpSender,
     /// FFmpeg Opus 编码器
     opus_encoder: FFmpegOpusEncoder,
+    /// FFmpeg 直接推流器 (用于 URL 流)
+    direct_streamer: Option<FFmpegDirectStreamer>,
     /// 是否正在运行
     running: Arc<AtomicBool>,
     /// 音频配置
     audio_config: AudioConfig,
     /// 目标地址
     dest_addr: String,
+    /// 流信息
+    streaming_info: VoiceStreamingInfo,
 }
 
 impl AudioStreamer {
@@ -68,9 +73,11 @@ impl AudioStreamer {
         Ok(Self {
             rtp_sender,
             opus_encoder,
+            direct_streamer: None,
             running: Arc::new(AtomicBool::new(false)),
             audio_config,
             dest_addr,
+            streaming_info: streaming_info.clone(),
         })
     }
 
@@ -160,6 +167,40 @@ impl AudioStreamer {
     pub fn stop(&mut self) {
         info!("停止音频流");
         self.running.store(false, Ordering::SeqCst);
+        
+        if let Some(ref mut streamer) = self.direct_streamer {
+            streamer.stop();
+        }
+    }
+    
+    /// 流式传输 URL 音频 (使用 FFmpeg 直接推流)
+    pub fn stream_url(&mut self, url: &str) -> Result<()> {
+        info!("开始从 URL 流式传输: {}", url);
+        
+        if self.direct_streamer.is_none() {
+            let config = StreamerConfig::from(&self.streaming_info);
+            self.direct_streamer = Some(FFmpegDirectStreamer::new(config)?);
+        }
+        
+        let streamer = self.direct_streamer.as_mut().unwrap();
+        streamer.start_stream_url(
+            url,
+            &self.streaming_info.ip,
+            self.streaming_info.port,
+            self.streaming_info.rtcp_port,
+        )?;
+        
+        self.running.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    
+    /// 等待推流结束
+    pub fn wait(&mut self) -> Result<()> {
+        if let Some(ref mut streamer) = self.direct_streamer {
+            streamer.wait()?;
+        }
+        self.running.store(false, Ordering::SeqCst);
+        Ok(())
     }
 
     /// 检查是否正在运行

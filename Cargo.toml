@@ -78,6 +78,13 @@ crossbeam = "0.8"
 # 随机播放
 rand = "0.8"
 
+# 正则表达式
+regex = "1.10"
+
+# 二维码生成
+qrcode = "0.14"
+image = "0.25"
+
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.12"
