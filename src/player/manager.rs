@@ -47,18 +47,39 @@ impl VoiceManager {
         // 调用 Kook API 加入频道
         let connection_info = self.kook_client.join_voice_channel(channel_id).await?;
 
+        // 解析端口
+        let port: u16 = connection_info.port as u16;
+        
+        let rtcp_port: u16 = connection_info.rtcp_port
+            .map(|p| p as u16)
+            .unwrap_or(port + 1);
+        
+        let rtcp_mux = connection_info.rtcp_mux.unwrap_or(true);
+        
+        let ssrc: u32 = connection_info.audio_ssrc
+            .map(|s| s as u32)
+            .unwrap_or(1111);
+        
+        let pt: u8 = connection_info.audio_pt
+            .map(|p| p as u8)
+            .unwrap_or(111);
+        
+        let bit_rate = connection_info.bitrate.unwrap_or(64000);
+
         info!(
-            "成功加入频道，RTP 服务器: {}:{}, SSRC: {}",
-            connection_info.ip, connection_info.port, connection_info.ssrc
+            "成功加入频道，RTP 服务器: {}:{}, SSRC: {}, PT: {}",
+            connection_info.ip, port, ssrc, pt
         );
 
         // 创建音频流处理器
         let streaming_info = VoiceStreamingInfo {
             ip: connection_info.ip.clone(),
-            port: connection_info.port,
-            rtcp_port: connection_info.rtcp_port,
-            ssrc: connection_info.ssrc,
-            bit_rate: connection_info.bit_rate,
+            port,
+            rtcp_port,
+            rtcp_mux,
+            ssrc,
+            pt,
+            bit_rate,
             sample_rate: 48000, // Kook 使用 48kHz
             channels: 2,        // 立体声
         };

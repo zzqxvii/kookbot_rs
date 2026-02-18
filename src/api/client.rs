@@ -167,10 +167,16 @@ impl KookClient {
         debug!("获取服务器 {} 的频道列表...", guild_id);
         
         let endpoint = format!("/channel/list?guild_id={}", guild_id);
-        let channels: Vec<Channel> = self.request(Method::GET, &endpoint, None).await?;
         
-        debug!("服务器 {} 有 {} 个频道", guild_id, channels.len());
-        Ok(channels)
+        #[derive(serde::Deserialize)]
+        struct ChannelListData {
+            items: Vec<Channel>,
+        }
+        
+        let data: ChannelListData = self.request(Method::GET, &endpoint, None).await?;
+        
+        debug!("服务器 {} 有 {} 个频道", guild_id, data.items.len());
+        Ok(data.items)
     }
 
     pub async fn join_voice_channel(&self, channel_id: &str) -> Result<VoiceConnectionInfo> {
@@ -180,7 +186,7 @@ impl KookClient {
 
         info!("正在加入语音频道: {}", channel_id);
         let info: VoiceConnectionInfo = self
-            .request(Method::POST, "/channel/voice/join", Some(body))
+            .request(Method::POST, "/voice/join", Some(body))
             .await?;
 
         info!(
@@ -197,25 +203,51 @@ impl KookClient {
 
         info!("正在离开语音频道: {}", channel_id);
         let _: serde_json::Value = self
-            .request(Method::POST, "/channel/voice/leave", Some(body))
+            .request(Method::POST, "/voice/leave", Some(body))
             .await?;
 
         info!("成功离开语音频道: {}", channel_id);
         Ok(())
     }
 
+    /// 获取语音频道中的用户列表
+    pub async fn get_voice_channel_users(&self, channel_id: &str) -> Result<Vec<User>> {
+        let endpoint = format!("/channel/user-list?channel_id={}", channel_id);
+        let users: Vec<User> = self.request(Method::GET, &endpoint, None).await?;
+        Ok(users)
+    }
+
+    /// 获取用户所在的语音频道
+    /// 遍历服务器的语音频道，查找用户所在的频道
     pub async fn get_user_voice_channel(
         &self,
         guild_id: &str,
         user_id: &str,
-    ) -> Result<Option<JoinedChannel>> {
-        let endpoint = format!("/guild/{}/user-channel/{}?user_id={}", guild_id, user_id, user_id);
+    ) -> Result<Option<Channel>> {
+        // 获取服务器所有频道
+        let channels = self.get_channel_list(guild_id).await?;
+        
+        // 过滤出语音频道 (type=2)
+        let voice_channels: Vec<&Channel> = channels.iter()
+            .filter(|c| c.channel_type == 2 && !c.is_category)
+            .collect();
 
-        match self.request::<Vec<JoinedChannel>>(Method::GET, &endpoint, None).await {
-            Ok(channels) => Ok(channels.into_iter().next()),
-            Err(BotError::KookApiError { code: 404, .. }) => Ok(None),
-            Err(e) => Err(e),
+        // 遍历语音频道查找用户
+        for channel in voice_channels {
+            match self.get_voice_channel_users(&channel.id).await {
+                Ok(users) => {
+                    if users.iter().any(|u| u.id == user_id) {
+                        info!("用户 {} 在语音频道: {} ({})", user_id, channel.name, channel.id);
+                        return Ok(Some(channel.clone()));
+                    }
+                }
+                Err(e) => {
+                    debug!("获取频道 {} 用户列表失败: {}", channel.id, e);
+                }
+            }
         }
+
+        Ok(None)
     }
 
     pub async fn send_channel_message(

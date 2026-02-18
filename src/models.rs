@@ -7,16 +7,30 @@ pub struct KookResponse<T> {
     pub data: Option<T>,
 }
 
+/// 语音连接信息
+///
+/// 参考: https://developer.kookapp.cn/doc/http/voice#加入语音频道
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VoiceConnectionInfo {
+    /// 媒体服务器的推流ip
     pub ip: String,
-    pub port: u16,
-    #[serde(rename = "rtcp_port")]
-    pub rtcp_port: u16,
-    #[serde(rename = "bitrate")]
-    pub bit_rate: i32,
-    pub ssrc: u32,
-    pub key: Option<String>,
+    /// 媒体服务器的推流端口
+    pub port: i32,
+    /// 媒体服务器的rtcp推流端口
+    #[serde(default)]
+    pub rtcp_port: Option<i32>,
+    /// 是否将rtcp与rtp使用同一个端口进行传输
+    #[serde(default)]
+    pub rtcp_mux: Option<bool>,
+    /// 当前语音房间要求的比特率
+    #[serde(default)]
+    pub bitrate: Option<i32>,
+    /// 传输的语音数据的ssrc
+    #[serde(default)]
+    pub audio_ssrc: Option<i32>,
+    /// 传输的语音数据的payload_type
+    #[serde(default)]
+    pub audio_pt: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -29,6 +29,9 @@ pub enum BotError {
     #[error("Invalid configuration: {0}")]
     ConfigError(String),
 
+    #[error("Voice error: {0}")]
+    VoiceError(String),
+
     #[error("Channel not found")]
     ChannelNotFound,
 

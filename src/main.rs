@@ -504,19 +504,6 @@ impl BotEventHandler {
             return;
         }
 
-        // 检查消息是否以 prefix 开头
-        if data.content.starts_with(&self.config.prefix) {
-            info!("[WebSocket] 收到 prefix 消息: {}", data.content);
-            
-            // 回复 hello
-            if let Some(client) = self.api_client.read().await.as_ref() {
-                if let Err(e) = client.send_channel_message(&data.target_id, "hello").await {
-                    error!("发送消息失败: {}", e);
-                }
-            }
-            return;
-        }
-
         if let Some((cmd, args)) = self.parse_command(&data.content) {
             info!("[WebSocket] 收到命令: {}", cmd);
 
@@ -525,21 +512,125 @@ impl BotEventHandler {
                     self.send_help(&data.target_id).await;
                 }
                 "play" | "p" => {
-                    if args.is_empty() {
-                        if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(&data.target_id, 
-                                "❌ 请提供搜索关键词或链接\n用法: `/play <关键词>`").await;
-                        }
-                    } else {
-                        let query = args.join(" ");
-                        if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(&data.target_id, 
-                                &format!("🎵 搜索 \"{}\" 功能开发中...", query)).await;
-                        }
-                    }
+                    self.handle_play(&data, args).await;
+                }
+                "join" | "j" => {
+                    self.handle_join(&data).await;
                 }
                 _ => {
                     debug!("[WebSocket] 未知命令: {}", cmd);
+                }
+            }
+        }
+    }
+
+    async fn handle_play(&self, data: &MessageData, args: Vec<&str>) {
+        let guild_id = &data.extra.guild_id;
+        let user_id = &data.author_id;
+        let channel_id = &data.target_id;
+
+        // 检查用户是否在语音频道
+        let voice_channel = {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                match client.get_user_voice_channel(guild_id, user_id).await {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        error!("获取用户语音频道失败: {}", e);
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("❌ 获取语音频道信息失败: {}", e)).await;
+                        }
+                        return;
+                    }
+                }
+            } else {
+                return;
+            }
+        };
+
+        match voice_channel {
+            Some(vc) => {
+                info!("用户 {} 在语音频道: {} ({})", user_id, vc.name, vc.id);
+                
+                // 加入语音频道
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    match client.join_voice_channel(&vc.id).await {
+                        Ok(conn_info) => {
+                            info!("成功加入语音频道: {}:{}", conn_info.ip, conn_info.port);
+                            
+                            if args.is_empty() {
+                                let _ = client.send_channel_message(channel_id, 
+                                    &format!("✅ 已加入语音频道 **{}**\n请使用 `/play <关键词>` 播放音乐", vc.name)).await;
+                            } else {
+                                let query = args.join(" ");
+                                let _ = client.send_channel_message(channel_id, 
+                                    &format!("🎵 已加入 **{}**，正在搜索 \"{}\"...", vc.name, query)).await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("加入语音频道失败: {}", e);
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("❌ 加入语音频道失败: {}", e)).await;
+                        }
+                    }
+                }
+            }
+            None => {
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        "⚠️ 你当前不在任何语音频道中\n请先加入一个语音频道，然后再使用 `/play` 命令").await;
+                }
+            }
+        }
+    }
+
+    async fn handle_join(&self, data: &MessageData) {
+        let guild_id = &data.extra.guild_id;
+        let user_id = &data.author_id;
+        let channel_id = &data.target_id;
+
+        // 检查用户是否在语音频道
+        let voice_channel = {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                match client.get_user_voice_channel(guild_id, user_id).await {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        error!("获取用户语音频道失败: {}", e);
+                        if let Some(client) = self.api_client.read().await.as_ref() {
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("❌ 获取语音频道信息失败: {}", e)).await;
+                        }
+                        return;
+                    }
+                }
+            } else {
+                return;
+            }
+        };
+
+        match voice_channel {
+            Some(vc) => {
+                info!("用户 {} 在语音频道: {} ({})", user_id, vc.name, vc.id);
+                
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    match client.join_voice_channel(&vc.id).await {
+                        Ok(conn_info) => {
+                            info!("成功加入语音频道: {}:{}", conn_info.ip, conn_info.port);
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("✅ 已加入语音频道 **{}**", vc.name)).await;
+                        }
+                        Err(e) => {
+                            error!("加入语音频道失败: {}", e);
+                            let _ = client.send_channel_message(channel_id, 
+                                &format!("❌ 加入语音频道失败: {}", e)).await;
+                        }
+                    }
+                }
+            }
+            None => {
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        "⚠️ 你当前不在任何语音频道中\n请先加入一个语音频道，然后再使用 `/join` 命令").await;
                 }
             }
         }

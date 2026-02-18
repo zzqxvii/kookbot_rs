@@ -40,7 +40,7 @@ impl AudioStreamer {
         let rtp_sender = RtpSender::new(
             dest_addr.clone(),
             streaming_info.ssrc,
-            111, // Opus 负载类型
+            streaming_info.pt,
             streaming_info.sample_rate,
         )?;
 
@@ -56,9 +56,10 @@ impl AudioStreamer {
         let opus_encoder = crate::audio::ffmpeg_encoder::FFmpegOpusEncoder::new(opus_config)?;
 
         info!(
-            "音频流处理器创建成功: 目标={}, SSRC={}, {}Hz, {} 声道, {}bps",
+            "音频流处理器创建成功: 目标={}, SSRC={}, PT={}, {}Hz, {} 声道, {}bps",
             dest_addr,
             streaming_info.ssrc,
+            streaming_info.pt,
             streaming_info.sample_rate,
             streaming_info.channels,
             streaming_info.bit_rate

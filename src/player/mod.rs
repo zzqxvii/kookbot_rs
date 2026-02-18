@@ -33,13 +33,27 @@ impl Default for Music {
     }
 }
 
+/// 语音推流信息
+///
+/// 用于 RTP 音频推流的连接参数
 #[derive(Debug, Clone)]
 pub struct VoiceStreamingInfo {
+    /// 媒体服务器 IP
     pub ip: String,
+    /// 媒体服务器端口
     pub port: u16,
+    /// RTCP 端口
     pub rtcp_port: u16,
+    /// 是否使用 RTCP MUX
+    pub rtcp_mux: bool,
+    /// SSRC
     pub ssrc: u32,
+    /// Payload Type
+    pub pt: u8,
+    /// 比特率
     pub bit_rate: i32,
+    /// 采样率
     pub sample_rate: u32,
+    /// 声道数
     pub channels: usize,
 }
