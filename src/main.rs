@@ -4,15 +4,62 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
+use std::fmt;
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::registry::LookupSpan;
 
-use kook_music_bot::api::{Channel, Guild, KookClient};
+use kook_music_bot::api::{Channel, KookClient};
 use kook_music_bot::config::{BotConfig, ConnectionMode};
 use kook_music_bot::webhook::{WebhookHandler, WebhookServer};
 use kook_music_bot::gateway::{EventHandler, GatewayClient, MessageData};
 use kook_music_bot::player::VoiceManager;
 use async_trait::async_trait;
 use serde_json::Value;
+
+struct AlignedFormatter;
+
+impl<S, N> FormatEvent<S, N> for AlignedFormatter
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: tracing_subscriber::fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> fmt::Result {
+        let meta = event.metadata();
+        
+        // 级别 (固定宽度 5)
+        let level_str = match *meta.level() {
+            tracing::Level::TRACE => "TRACE",
+            tracing::Level::DEBUG => "DEBUG",
+            tracing::Level::INFO => "INFO ",
+            tracing::Level::WARN => "WARN ",
+            tracing::Level::ERROR => "ERROR",
+        };
+        write!(writer, "{} ", level_str)?;
+        
+        // 时间
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        write!(writer, "{} ", timestamp)?;
+        
+        // 文件和行号 (路径固定宽度，行号紧跟)
+        let file = meta.file().unwrap_or("unknown");
+        let line = meta.line().unwrap_or(0);
+        let location = if file.len() > 18 {
+            format!("...{}:{}", &file[file.len()-15..], line)
+        } else {
+            format!("{}:{}", file, line)
+        };
+        write!(writer, "{:<22} ", location)?;
+        
+        // 消息
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
 
 /// Kook 音乐机器人
 #[derive(Parser, Debug)]
@@ -43,19 +90,12 @@ async fn main() -> Result<()> {
         _ => Level::INFO,
     };
 
-    let subscriber = FmtSubscriber::builder()
+    tracing_subscriber::fmt()
         .with_max_level(log_level)
-        .with_target(false)
-        .with_thread_ids(false)
-        .pretty()
+        .event_format(AlignedFormatter)
         .init();
 
-    println!();
-    println!("╔════════════════════════════════════════════════╗");
-    println!("║       Kook Music Bot - Rust 实现               ║");
-    println!("║       Version: 0.1.0                           ║");
-    println!("╚════════════════════════════════════════════════╝");
-    println!();
+    info!("Kook Music Bot - Rust 实现 v0.1.0");
     info!("日志级别: {}", cli.log_level);
 
     if cli.init {
@@ -185,7 +225,6 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
                 info!("机器人未加入任何服务器");
             } else {
                 info!("已加入 {} 个服务器:", guilds.len());
-                println!();
                 
                 for (idx, guild) in guilds.iter().enumerate() {
                     info!("----------------------------------------");
@@ -225,7 +264,6 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
                 }
                 
                 info!("----------------------------------------");
-                println!();
             }
         }
         Err(e) => {
@@ -261,7 +299,6 @@ async fn start_webhook_mode(config: BotConfig, api_client: KookClient) -> Result
 
     info!("✓ Webhook 服务器已启动，等待 KOOK 事件...");
     info!("========================================");
-    println!();
 
     server.run().await?;
 
@@ -287,7 +324,6 @@ async fn start_websocket_mode(config: BotConfig, api_client: KookClient) -> Resu
 
     info!("✓ WebSocket 客户端已连接");
     info!("========================================");
-    println!();
 
     client.run().await?;
 
