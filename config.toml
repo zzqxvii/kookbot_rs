@@ -13,7 +13,7 @@ token = "1/MjI2ODk=/KrB0f5MlUhMXPlSsuPdKig=="
 mode = "websocket"
 
 # 命令前缀
-prefix = "!"
+prefix = "/"
 
 # 管理员 ID 列表
 admins = ["你的用户ID"]

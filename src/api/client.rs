@@ -232,12 +232,16 @@ impl KookClient {
             .request(Method::POST, "/message/create", Some(body))
             .await?;
 
-        response["id"]
+        // Kook API 返回 msg_id 字段
+        response["msg_id"]
             .as_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| BotError::KookApiError {
-                code: -1,
-                message: "无法获取消息 ID".to_string(),
+            .ok_or_else(|| {
+                tracing::warn!("发送消息响应: {:?}", response);
+                BotError::KookApiError {
+                    code: -1,
+                    message: format!("无法获取消息 ID: {:?}", response),
+                }
             })
     }
 }

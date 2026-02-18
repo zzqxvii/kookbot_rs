@@ -331,6 +331,17 @@ impl BotWebhookHandler {
             return;
         }
 
+        // 检查消息是否以 prefix 开头
+        if content.starts_with(&self.config.prefix) {
+            info!("[Webhook] 收到 prefix 消息: {}", content);
+            
+            // 回复 hello
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(channel_id, "hello").await;
+            }
+            return;
+        }
+
         if let Some((cmd, args)) = self.parse_command(content) {
             info!("[Webhook] 收到命令: {} (来自: {}, 频道: {})", cmd, author_id, channel_id);
 
@@ -341,7 +352,7 @@ impl BotWebhookHandler {
                 "join" | "j" => {
                     if let Some(client) = self.api_client.read().await.as_ref() {
                         let _ = client.send_channel_message(channel_id, 
-                            "⚠️ 加入语音频道功能需要服务器ID，请使用 !join <频道ID> 直接指定频道").await;
+                            "⚠️ 加入语音频道功能需要服务器ID，请使用 /join <频道ID> 直接指定频道").await;
                     }
                 }
                 "leave" | "l" => {
@@ -493,6 +504,19 @@ impl BotEventHandler {
             return;
         }
 
+        // 检查消息是否以 prefix 开头
+        if data.content.starts_with(&self.config.prefix) {
+            info!("[WebSocket] 收到 prefix 消息: {}", data.content);
+            
+            // 回复 hello
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                if let Err(e) = client.send_channel_message(&data.target_id, "hello").await {
+                    error!("发送消息失败: {}", e);
+                }
+            }
+            return;
+        }
+
         if let Some((cmd, args)) = self.parse_command(&data.content) {
             info!("[WebSocket] 收到命令: {}", cmd);
 
@@ -504,7 +528,7 @@ impl BotEventHandler {
                     if args.is_empty() {
                         if let Some(client) = self.api_client.read().await.as_ref() {
                             let _ = client.send_channel_message(&data.target_id, 
-                                "❌ 请提供搜索关键词或链接\n用法: `!play <关键词>`").await;
+                                "❌ 请提供搜索关键词或链接\n用法: `/play <关键词>`").await;
                         }
                     } else {
                         let query = args.join(" ");
@@ -546,7 +570,8 @@ impl BotEventHandler {
 #[async_trait]
 impl EventHandler for BotEventHandler {
     async fn on_message(&self, data: MessageData) {
-        if data.is_text() {
+        // 处理文字消息和 KMarkdown 消息
+        if data.is_text() || data.is_kmarkdown() {
             self.handle_message(&data).await;
         }
     }
@@ -556,6 +581,6 @@ impl EventHandler for BotEventHandler {
     }
 
     async fn on_unknown(&self, data: Value) {
-        warn!("[EventHandler] 未知事件: {:?}", data);
+        warn!("[EventHandler] 未知事件类型: {:?}", data.get("type"));
     }
 }

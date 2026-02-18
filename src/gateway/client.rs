@@ -238,15 +238,19 @@ impl GatewayClient {
                     self.session_info.write().await.last_sn = sn;
                 }
                 
-                info!("  事件数据 d: {}", 
-                    serde_json::to_string(&msg.d).unwrap_or_default().chars().take(300).collect::<String>());
-                
-                if let Some(event) = parse_event(msg.d.clone()) {
-                    info!("  解析事件成功: {:?}", std::mem::discriminant(&event));
-                    self.dispatch_event(event).await;
+                if let Some(data) = &msg.d {
+                    info!("  事件数据 d: {}", 
+                        serde_json::to_string(data).unwrap_or_default().chars().take(300).collect::<String>());
+                    
+                    if let Some(event) = parse_event(data.clone()) {
+                        info!("  解析事件成功: {:?}", std::mem::discriminant(&event));
+                        self.dispatch_event(event).await;
+                    } else {
+                        warn!("  解析事件返回 None");
+                        warn!("  原始数据: {:?}", data);
+                    }
                 } else {
-                    warn!("  解析事件返回 None");
-                    warn!("  原始数据: {:?}", msg.d);
+                    warn!("  事件数据 d 为空");
                 }
             }
             SignalType::Hello => {

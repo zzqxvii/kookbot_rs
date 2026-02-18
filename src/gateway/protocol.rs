@@ -35,7 +35,8 @@ pub struct GatewayMessage {
     /// 信令类型: 0=事件, 1=Hello, 2=Ping, 3=Pong, 4=Resume, 5=Reconnect, 6=ResumeAck
     pub s: u8,
     /// 数据内容
-    pub d: serde_json::Value,
+    #[serde(default)]
+    pub d: Option<serde_json::Value>,
     /// 序列号 (可选)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sn: Option<u64>,
@@ -65,7 +66,7 @@ impl GatewayMessage {
     pub fn pong() -> Self {
         Self {
             s: SignalType::Pong as u8,
-            d: serde_json::json!({}),
+            d: Some(serde_json::json!({})),
             sn: None,
         }
     }
@@ -73,7 +74,7 @@ impl GatewayMessage {
     pub fn ping() -> Self {
         Self {
             s: SignalType::Ping as u8,
-            d: serde_json::json!({}),
+            d: Some(serde_json::json!({})),
             sn: None,
         }
     }
@@ -81,17 +82,17 @@ impl GatewayMessage {
     pub fn resume(session_id: &str, sn: u64) -> Self {
         Self {
             s: SignalType::Resume as u8,
-            d: serde_json::json!({
+            d: Some(serde_json::json!({
                 "session_id": session_id,
                 "sn": sn
-            }),
+            })),
             sn: None,
         }
     }
 
     pub fn heartbeat_interval(&self) -> Option<u64> {
         if self.is_hello() {
-            self.d.get("heartbeat_interval")?.as_u64()
+            self.d.as_ref()?.get("heartbeat_interval")?.as_u64()
         } else {
             None
         }
@@ -99,7 +100,7 @@ impl GatewayMessage {
 
     pub fn session_id(&self) -> Option<&str> {
         if self.is_hello() {
-            self.d.get("session_id")?.as_str()
+            self.d.as_ref()?.get("session_id")?.as_str()
         } else {
             None
         }

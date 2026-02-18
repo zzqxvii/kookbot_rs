@@ -218,7 +218,7 @@ impl Default for LogConfig {
 }
 
 fn default_prefix() -> String {
-    "!".to_string()
+    "/".to_string()
 }
 fn default_volume() -> f32 {
     0.5
