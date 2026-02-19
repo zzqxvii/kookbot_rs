@@ -102,13 +102,14 @@ impl FFmpegDirectStreamer {
         let ssrc = self.config.ssrc;
         let pt = self.config.pt;
 
-        info!("启动 FFmpeg 推流: {} -> {}", url, rtp_url);
+        info!("🎵 开始播放: {}", url);
 
         let mut child = Command::new("ffmpeg")
             .args([
                 "-re",
                 "-loglevel",
-                "info",
+                "warning",
+                "-hide_banner",
                 "-i",
                 url,
                 "-map",
@@ -153,21 +154,15 @@ impl FFmpegDirectStreamer {
                 }
                 if let Ok(line) = line {
                     let line_lower = line.to_lowercase();
+                    // 只显示错误和警告，其他都忽略
                     if line_lower.contains("error") {
                         error!("[FFmpeg] {}", line);
                     } else if line_lower.contains("warning") {
                         warn!("[FFmpeg] {}", line);
-                    } else if line.contains("size=")
-                        || line.contains("time=")
-                        || line.contains("bitrate=")
-                    {
-                        debug!("[FFmpeg] {}", line);
-                    } else {
-                        info!("[FFmpeg] {}", line);
                     }
+                    // 进度信息 (size=, time=, bitrate=) 和其他日志都不显示
                 }
             }
-            info!("[FFmpeg] 日志线程结束");
         });
 
         self.process = Some(child);
@@ -177,26 +172,18 @@ impl FFmpegDirectStreamer {
     /// 停止推流
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-
         if let Some(mut child) = self.process.take() {
-            info!("正在停止 FFmpeg 进程 (PID: {:?})", child.id());
             let _ = child.kill();
             let _ = child.wait();
-            info!("FFmpeg 进程已停止");
+            info!("⏹️ 播放已停止");
         }
-    }
-
-    /// 检查是否正在运行
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
     }
 
     /// 等待推流结束
     pub fn wait(&mut self) -> Result<()> {
         if let Some(ref mut child) = self.process {
-            let status = child.wait().map_err(|e| BotError::IoError(e))?;
+            let _ = child.wait().map_err(|e| BotError::IoError(e))?;
             self.running.store(false, Ordering::SeqCst);
-            info!("FFmpeg 进程结束: {:?}", status);
         }
         Ok(())
     }
