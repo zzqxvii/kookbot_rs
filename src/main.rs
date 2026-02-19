@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -64,22 +63,6 @@ where
     }
 }
 
-/// Kook 音乐机器人
-#[derive(Parser, Debug)]
-#[command(name = "kook-music-bot")]
-#[command(about = "Kook Music Bot - Rust 实现")]
-#[command(version = "0.1.0")]
-struct Cli {
-    #[arg(long)]
-    init: bool,
-    #[arg(long)]
-    test_ffmpeg: bool,
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-    #[arg(short, long, default_value = "info")]
-    log_level: String,
-}
-
 fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> anyhow::Result<()> {
     use std::fs;
 
@@ -116,89 +99,14 @@ fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> anyhow:
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-
-    let log_level = match cli.log_level.to_lowercase().as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => Level::INFO,
-    };
-
     tracing_subscriber::fmt()
-        .with_max_level(log_level)
+        .with_max_level(Level::INFO)
         .event_format(AlignedFormatter)
         .init();
 
     info!("Kook Music Bot - Rust 实现 v0.1.0");
-    info!("日志级别: {}", cli.log_level);
 
-    if cli.init {
-        create_config().await?;
-        return Ok(());
-    }
-
-    if cli.test_ffmpeg {
-        test_ffmpeg().await?;
-        return Ok(());
-    }
-
-    run_bot(cli.config).await?;
-    Ok(())
-}
-
-async fn create_config() -> Result<()> {
-    println!("【创建配置文件】\n");
-
-    if std::path::Path::new("config.toml").exists() {
-        println!("配置文件已存在！");
-        return Ok(());
-    }
-
-    tokio::fs::copy("config.example.toml", "config.toml").await?;
-    println!("✓ 配置文件已创建: config.toml");
-    println!("\n请编辑 config.toml，填写以下内容：");
-    println!("  - token: Kook Bot Token");
-    println!("  - mode: 连接模式 (websocket/webhook)");
-    println!("  - webhook.verify_token: Webhook 验证令牌 (webhook 模式需要)");
-    println!("\n获取 Token: https://developer.kookapp.cn/app/index");
-
-    Ok(())
-}
-
-async fn test_ffmpeg() -> Result<()> {
-    println!("【FFmpeg 测试】\n");
-
-    let output = tokio::process::Command::new("ffmpeg")
-        .args(["-version"])
-        .output()
-        .await?;
-
-    if output.status.success() {
-        let version = String::from_utf8_lossy(&output.stdout);
-        println!("FFmpeg 版本:");
-        for line in version.lines().take(3) {
-            println!("  {}", line);
-        }
-        println!();
-    }
-
-    println!("检查 Opus 编码器支持...");
-    let output = tokio::process::Command::new("ffmpeg")
-        .args(["-encoders"])
-        .output()
-        .await?;
-
-    let encoders = String::from_utf8_lossy(&output.stdout);
-    if encoders.contains("libopus") {
-        println!("  ✓ libopus 编码器可用");
-    } else {
-        println!("  ✗ libopus 编码器不可用");
-    }
-
-    println!();
+    run_bot(None).await?;
     Ok(())
 }
 
