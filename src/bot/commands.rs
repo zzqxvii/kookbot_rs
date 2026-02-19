@@ -31,7 +31,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info};
 
 use crate::api::KookClient;
-use crate::config::BotConfig;
+use crate::core::config::BotConfig;
 use crate::gateway::MessageData;
 use crate::music::NeteaseClient;
 use crate::player::VoiceManager;

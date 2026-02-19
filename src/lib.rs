@@ -6,15 +6,12 @@
 pub mod api;
 pub mod audio;
 pub mod bot;
-pub mod config;
-pub mod error;
+pub mod common;
+pub mod core;
 pub mod gateway;
-pub mod logging;
-pub mod models;
 pub mod music;
 pub mod player;
-pub mod utils;
 pub mod webhook;
 
-pub use config::BotConfig;
-pub use error::{BotError, Result};
+// 重新导出核心类型，方便使用
+pub use core::{BotConfig, BotError, Result};

@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use std::fs::File;
 use std::path::Path;
 use symphonia::core::audio::Signal;

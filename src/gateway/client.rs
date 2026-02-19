@@ -1,6 +1,6 @@
 //! Gateway WebSocket 客户端
 
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use crate::gateway::events::{parse_event, Event, EventHandler};
 use crate::gateway::protocol::{GatewayMessage, Intents, SessionInfo, SignalType};
 use futures_util::{SinkExt, StreamExt};
@@ -93,6 +93,29 @@ impl GatewayClient {
             return Err(BotError::GatewayError("WebSocket 流不存在".to_string()));
         }
 
+        // 等待第一个消息（Hello），最多等待10秒
+        info!("等待服务器 Hello 消息...");
+        let mut hello_received = false;
+        let hello_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        
+        while tokio::time::Instant::now() < hello_deadline {
+            if let Some(msg) = self.receive_message().await {
+                self.handle_message(msg).await;
+                // 检查是否收到了 Hello（heartbeat_interval 会被设置）
+                if *self.heartbeat_interval.read().await > 0 {
+                    hello_received = true;
+                    info!("✓ 收到 Hello 消息，连接正常");
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        
+        if !hello_received {
+            error!("等待 Hello 消息超时（10秒），连接可能失败");
+            return Err(BotError::GatewayError("未收到 Hello 消息".to_string()));
+        }
+
         let mut heartbeat_tick = interval(Duration::from_secs(30));
         let mut need_heartbeat = true;
         let mut message_count = 0u32;
@@ -112,16 +135,8 @@ impl GatewayClient {
 
                 message_result = self.receive_message() => {
                     message_count += 1;
-                    info!("[消息 #{}] 接收结果: {}", message_count, 
-                        if message_result.is_some() { "有数据" } else { "无数据" });
-                    
                     if let Some(msg) = message_result {
                         self.handle_message(msg).await;
-                    } else {
-                        // 检查是否因为连接断开
-                        let running = *self.running.read().await;
-                        let stream_exists = self.ws_stream.read().await.is_some();
-                        info!("消息接收返回 None，running={}, stream_exists={}", running, stream_exists);
                     }
                 }
             }
@@ -132,46 +147,24 @@ impl GatewayClient {
     }
 
     async fn receive_message(&self) -> Option<Message> {
-        info!("尝试接收消息...");
-        
-        // 使用 read 锁而不是 write 锁，避免阻塞其他操作
-        let stream_opt = {
-            let guard = self.ws_stream.read().await;
-            guard.as_ref().map(|_| ())  // 只检查是否存在
-        };
-        
-        if stream_opt.is_none() {
-            warn!("WebSocket 流不存在");
-            return None;
-        }
-        
-        // 现在获取 write 锁来读取消息
         let mut stream_guard = self.ws_stream.write().await;
+        
         if let Some(ref mut stream) = *stream_guard {
-            info!("等待 WebSocket 消息 (超时: 5秒)...");
-            
             match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
-                Ok(Some(Ok(msg))) => {
-                    info!("收到 WebSocket 消息: {:?}", msg);
-                    Some(msg)
-                }
+                Ok(Some(Ok(msg))) => Some(msg),
                 Ok(Some(Err(e))) => {
                     error!("WebSocket 读取错误: {}", e);
                     *self.running.write().await = false;
                     None
                 }
                 Ok(None) => {
-                    warn!("WebSocket 连接已关闭 (stream.next() 返回 None)");
+                    warn!("WebSocket 连接已关闭");
                     *self.running.write().await = false;
                     None
                 }
-                Err(_) => {
-                    info!("接收消息超时 (5秒)");
-                    None
-                }
+                Err(_) => None,
             }
         } else {
-            warn!("WebSocket 流在检查时存在但读取时消失");
             None
         }
     }

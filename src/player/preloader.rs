@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use super::Music;
 use std::collections::HashMap;
 use std::path::PathBuf;

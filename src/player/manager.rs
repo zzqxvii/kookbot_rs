@@ -1,7 +1,7 @@
 use crate::api::client::KookClient;
 use crate::audio::streamer::AudioStreamer;
-use crate::config::BotConfig;
-use crate::error::{BotError, Result};
+use crate::core::config::BotConfig;
+use crate::core::error::{BotError, Result};
 use super::VoiceStreamingInfo;
 use std::path::Path;
 use std::sync::Arc;

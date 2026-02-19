@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use crate::player::Music;
 use futures_util::StreamExt;
 use std::path::{Path, PathBuf};

@@ -14,7 +14,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
-use crate::config::BotConfig;
+use crate::core::config::BotConfig;
 use crate::music::NeteaseClient;
 use crate::player::{VoiceManager, VoiceStreamingInfo};
 use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
@@ -656,7 +656,7 @@ impl CommandHandler for WyyLoginCommand {
                             803 => {
                                 info!("登录成功! cookie: {:?}", result.cookie);
                                 if let Some(ref cookie) = result.cookie {
-                                    use crate::utils::update_netease_cookie;
+                                    use crate::common::utils::update_netease_cookie;
                                     match update_netease_cookie(&config_path, cookie) {
                                         Ok(_) => {
                                             if let Some(client) = api_client.read().await.as_ref() {

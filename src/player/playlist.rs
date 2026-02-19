@@ -1,5 +1,5 @@
 use super::Music;
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use rand::seq::SliceRandom;
 use tracing::{debug, info};
 

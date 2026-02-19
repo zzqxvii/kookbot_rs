@@ -2,7 +2,7 @@
 //!
 //! 支持 AES-256-CBC 加密的消息解密
 
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 
 /// 解密器
 pub struct MessageDecryptor {

@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use crate::player::VoiceStreamingInfo;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};

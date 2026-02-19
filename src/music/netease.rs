@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use crate::player::Music;
 use reqwest::Client;
 use serde::Deserialize;

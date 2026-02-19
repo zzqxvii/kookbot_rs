@@ -15,8 +15,8 @@ use tracing::{info, Level};
 
 use kook_music_bot::api::KookClient;
 use kook_music_bot::bot::{create_bot, Bot, BotEventHandler, BotWebhookHandler};
-use kook_music_bot::config::{BotConfig, ConnectionMode};
-use kook_music_bot::logging::init_logging;
+use kook_music_bot::core::config::{BotConfig, ConnectionMode};
+use kook_music_bot::common::logging::init_logging;
 use kook_music_bot::webhook::WebhookServer;
 use kook_music_bot::gateway::GatewayClient;
 

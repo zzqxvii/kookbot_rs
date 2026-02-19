@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use tracing::{debug, error, info, trace, warn};

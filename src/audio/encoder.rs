@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use tracing::{info, trace};
 
 /// Opus 编码器配置

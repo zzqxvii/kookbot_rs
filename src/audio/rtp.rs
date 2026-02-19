@@ -1,4 +1,4 @@
-use crate::error::{BotError, Result};
+use crate::core::error::{BotError, Result};
 use std::net::UdpSocket;
 use std::time::Instant;
 use tracing::{debug, error, info, trace, warn};
