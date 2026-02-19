@@ -46,6 +46,7 @@ serde_repr = "0.1"
 # 日志
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+owo-colors = "4.0"
 
 # 错误处理
 anyhow = "1.0"

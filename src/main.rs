@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn, Level};
 use std::fmt;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
+use owo_colors::OwoColorize;
 
 use kook_music_bot::api::{Channel, KookClient};
 use kook_music_bot::config::{BotConfig, ConnectionMode};
@@ -32,31 +33,31 @@ where
         event: &tracing::Event<'_>,
     ) -> fmt::Result {
         let meta = event.metadata();
-        
-        // 级别 (固定宽度 5)
+
+        // 级别 (3字符缩写) + 颜色
         let level_str = match *meta.level() {
-            tracing::Level::TRACE => "TRACE",
-            tracing::Level::DEBUG => "DEBUG",
-            tracing::Level::INFO => "INFO ",
-            tracing::Level::WARN => "WARN ",
-            tracing::Level::ERROR => "ERROR",
+            tracing::Level::TRACE => "TRC".dimmed().to_string(),
+            tracing::Level::DEBUG => "DBG".blue().to_string(),
+            tracing::Level::INFO => "INF".green().to_string(),
+            tracing::Level::WARN => "WRN".yellow().to_string(),
+            tracing::Level::ERROR => "ERR".red().to_string(),
         };
         write!(writer, "{} ", level_str)?;
-        
-        // 时间
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+
+        // 时间 (日期用/分隔，毫秒1位)
+        let timestamp = chrono::Local::now().format("%Y/%m/%d %H:%M:%S");
         write!(writer, "{} ", timestamp)?;
-        
+
         // 文件和行号 (路径固定宽度，行号紧跟)
         let file = meta.file().unwrap_or("unknown");
         let line = meta.line().unwrap_or(0);
         let location = if file.len() > 18 {
-            format!("...{}:{}", &file[file.len()-15..], line)
+            format!("{}:{}", &file[file.len()-18..], line)
         } else {
             format!("{}:{}", file, line)
         };
-        write!(writer, "{:<22} ", location)?;
-        
+        write!(writer, "{:<22} ", location.dimmed())?;
+
         // 消息
         ctx.format_fields(writer.by_ref(), event)?;
         writeln!(writer)
@@ -81,11 +82,11 @@ struct Cli {
 
 fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> anyhow::Result<()> {
     use std::fs;
-    
+
     let content = fs::read_to_string(config_path)?;
     let mut updated = false;
     let mut new_lines = Vec::new();
-    
+
     for line in content.lines() {
         if line.starts_with("netease_cookie") {
             new_lines.push(format!("netease_cookie = \"{}\"", cookie));
@@ -100,14 +101,14 @@ fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> anyhow:
             new_lines.push(line.to_string());
         }
     }
-    
+
     if !updated {
         // 如果没有找到 [music] section，在文件末尾添加
         new_lines.push(String::new());
         new_lines.push("[music]".to_string());
         new_lines.push(format!("netease_cookie = \"{}\"", cookie));
     }
-    
+
     fs::write(config_path, new_lines.join("\n"))?;
     info!("Cookie 已保存到 {:?}", config_path);
     Ok(())
@@ -212,7 +213,7 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
     info!("✓ 配置加载成功");
     info!("  命令前缀: {}", config.prefix);
     info!("  连接模式: {:?}", config.mode);
-    info!("  Token: {}...{}", 
+    info!("  Token: {}...{}",
         &config.token.chars().take(4).collect::<String>(),
         &config.token.chars().last().unwrap_or('?'));
 
@@ -236,7 +237,7 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
     info!("========================================");
     info!("获取机器人信息");
     info!("========================================");
-    
+
     match api_client.get_current_user().await {
         Ok(user) => {
             info!("机器人 ID: {}", user.id);
@@ -261,7 +262,7 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
                 info!("机器人未加入任何服务器");
             } else {
                 info!("已加入 {} 个服务器:", guilds.len());
-                
+
                 for (idx, guild) in guilds.iter().enumerate() {
                     info!("----------------------------------------");
                     info!("[{}] {}", idx + 1, guild.name);
@@ -269,7 +270,7 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
                     if !guild.topic.is_empty() {
                         info!("    主题: {}", guild.topic);
                     }
-                    
+
                     // 获取该服务器的频道列表
                     match api_client.get_channel_list(&guild.id).await {
                         Ok(channels) => {
@@ -282,10 +283,10 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
                             let categories: Vec<&Channel> = channels.iter()
                                 .filter(|c| c.is_category)
                                 .collect();
-                            
+
                             info!("    频道: {} 个文字频道, {} 个语音频道, {} 个分类",
                                 text_channels.len(), voice_channels.len(), categories.len());
-                            
+
                             if !voice_channels.is_empty() {
                                 let vc_names: Vec<&str> = voice_channels.iter()
                                     .map(|c| c.name.as_str())
@@ -298,7 +299,7 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
                         }
                     }
                 }
-                
+
                 info!("----------------------------------------");
             }
         }
@@ -323,8 +324,8 @@ async fn start_webhook_mode(config: BotConfig, api_client: KookClient) -> Result
     info!("========================================");
     info!("启动 Webhook 服务器");
     info!("========================================");
-    info!("地址: http://{}:{}", 
-        config.webhook.host, 
+    info!("地址: http://{}:{}",
+        config.webhook.host,
         config.webhook.port
     );
     info!("路径: {}", config.webhook.path);
@@ -406,7 +407,7 @@ impl BotWebhookHandler {
         // 检查消息是否以 prefix 开头
         if content.starts_with(&self.config.prefix) {
             info!("[Webhook] 收到 prefix 消息: {}", content);
-            
+
             // 回复 hello
             if let Some(client) = self.api_client.read().await.as_ref() {
                 let _ = client.send_channel_message(channel_id, "hello").await;
@@ -423,7 +424,7 @@ impl BotWebhookHandler {
                 }
                 "join" | "j" => {
                     if let Some(client) = self.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(channel_id, 
+                        let _ = client.send_channel_message(channel_id,
                             "⚠️ 加入语音频道功能需要服务器ID，请使用 /join <频道ID> 直接指定频道").await;
                     }
                 }
@@ -438,7 +439,7 @@ impl BotWebhookHandler {
                             }
                             Err(e) => {
                                 if let Some(client) = self.api_client.read().await.as_ref() {
-                                    let _ = client.send_channel_message(channel_id, 
+                                    let _ = client.send_channel_message(channel_id,
                                         &format!("❌ 离开语音频道失败: {}", e)).await;
                                 }
                             }
@@ -452,13 +453,13 @@ impl BotWebhookHandler {
                 "play" | "p" => {
                     if args.is_empty() {
                         if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 "❌ 请提供搜索关键词或链接\n用法: `!play <关键词>`").await;
                         }
                     } else {
                         let query = args.join(" ");
                         if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("🎵 搜索 \"{}\" 功能开发中...", query)).await;
                         }
                     }
@@ -541,18 +542,18 @@ impl BotEventHandler {
         // 清理 cookie 格式
         let netease_cookie = config.music.netease_cookie.as_ref()
             .map(|c| Self::clean_cookie(c));
-        
+
         let netease_client = NeteaseClient::with_cookie(
             &config.music.netease_api_url,
             netease_cookie,
         );
-        
+
         if netease_client.has_cookie() {
             info!("已加载网易云登录凭证");
         } else {
             info!("未配置网易云登录凭证，可能只能播放试听版本");
         }
-        
+
         Self {
             config,
             api_client: Arc::new(RwLock::new(Some(api_client))),
@@ -560,7 +561,7 @@ impl BotEventHandler {
             voice_manager: Arc::new(Mutex::new(None)),
         }
     }
-    
+
     /// 清理 cookie 字符串
     fn clean_cookie(raw: &str) -> String {
         raw.split(';')
@@ -656,7 +657,7 @@ impl BotEventHandler {
                     Err(e) => {
                         error!("获取用户语音频道失败: {}", e);
                         if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("❌ 获取语音频道信息失败: {}", e)).await;
                         }
                         return;
@@ -670,25 +671,25 @@ impl BotEventHandler {
         match voice_channel {
             Some(vc) => {
                 info!("用户 {} 在语音频道: {} ({})", user_id, vc.name, vc.id);
-                
+
                 // 加入语音频道
                 if let Some(client) = self.api_client.read().await.as_ref() {
                     match client.join_voice_channel(&vc.id).await {
                         Ok(conn_info) => {
                             info!("成功加入语音频道: {}:{}", conn_info.ip(), conn_info.port());
-                            
+
                             if args.is_empty() {
-                                let _ = client.send_channel_message(channel_id, 
+                                let _ = client.send_channel_message(channel_id,
                                     &format!("✅ 已加入语音频道 **{}**\n请使用 `/play <关键词>` 播放音乐", vc.name)).await;
                             } else {
                                 let query = args.join(" ");
-                                let _ = client.send_channel_message(channel_id, 
+                                let _ = client.send_channel_message(channel_id,
                                     &format!("🎵 已加入 **{}**，正在搜索 \"{}\"...", vc.name, query)).await;
                             }
                         }
                         Err(e) => {
                             error!("加入语音频道失败: {}", e);
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("❌ 加入语音频道失败: {}", e)).await;
                         }
                     }
@@ -696,7 +697,7 @@ impl BotEventHandler {
             }
             None => {
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         "⚠️ 你当前不在任何语音频道中\n请先加入一个语音频道，然后再使用 `/play` 命令").await;
                 }
             }
@@ -716,7 +717,7 @@ impl BotEventHandler {
                     Err(e) => {
                         error!("获取用户语音频道失败: {}", e);
                         if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("❌ 获取语音频道信息失败: {}", e)).await;
                         }
                         return;
@@ -730,17 +731,17 @@ impl BotEventHandler {
         match voice_channel {
             Some(vc) => {
                 info!("用户 {} 在语音频道: {} ({})", user_id, vc.name, vc.id);
-                
+
                 if let Some(client) = self.api_client.read().await.as_ref() {
                     match client.join_voice_channel(&vc.id).await {
                         Ok(conn_info) => {
                             info!("成功加入语音频道: {}:{}", conn_info.ip(), conn_info.port());
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("✅ 已加入语音频道 **{}**", vc.name)).await;
                         }
                         Err(e) => {
                             error!("加入语音频道失败: {}", e);
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("❌ 加入语音频道失败: {}", e)).await;
                         }
                     }
@@ -748,7 +749,7 @@ impl BotEventHandler {
             }
             None => {
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         "⚠️ 你当前不在任何语音频道中\n请先加入一个语音频道，然后再使用 `/join` 命令").await;
                 }
             }
@@ -757,7 +758,7 @@ impl BotEventHandler {
 
     async fn handle_leave(&self, data: &MessageData) {
         let channel_id = &data.target_id;
-        
+
         let mut vm = self.voice_manager.lock().await;
         if let Some(ref mut voice_manager) = *vm {
             match voice_manager.leave_channel().await {
@@ -768,7 +769,7 @@ impl BotEventHandler {
                 }
                 Err(e) => {
                     if let Some(client) = self.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(channel_id, 
+                        let _ = client.send_channel_message(channel_id,
                             &format!("❌ 离开语音频道失败: {}", e)).await;
                     }
                 }
@@ -787,7 +788,7 @@ impl BotEventHandler {
 
         if args.is_empty() {
             if let Some(client) = self.api_client.read().await.as_ref() {
-                let _ = client.send_channel_message(channel_id, 
+                let _ = client.send_channel_message(channel_id,
                     "❌ 请提供歌曲链接或搜索关键词\n用法: `/wyy <歌曲链接或关键词>`").await;
             }
             return;
@@ -819,7 +820,7 @@ impl BotEventHandler {
             Err(e) => {
                 error!("获取歌单失败: {}", e);
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         &format!("❌ 获取歌单失败: {}", e)).await;
                 }
                 return;
@@ -834,7 +835,7 @@ impl BotEventHandler {
         }
 
         if let Some(client) = self.api_client.read().await.as_ref() {
-            let _ = client.send_channel_message(channel_id, 
+            let _ = client.send_channel_message(channel_id,
                 &format!("📋 **歌单：{}**\n共 {} 首歌曲，开始播放...", playlist.name, playlist.track_ids.len())).await;
         }
 
@@ -857,7 +858,7 @@ impl BotEventHandler {
             Some(vc) => vc,
             None => {
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         "⚠️ 你当前不在任何语音频道中").await;
                 }
                 return;
@@ -867,7 +868,7 @@ impl BotEventHandler {
         // 逐首播放歌曲
         for (index, track_id) in playlist.track_ids.iter().enumerate() {
             let netease = self.netease_client.read().await;
-            
+
             // 获取歌曲详情
             let song = match netease.get_song_detail(*track_id).await {
                 Ok(s) => s,
@@ -905,7 +906,7 @@ impl BotEventHandler {
 
             // 发送播放消息
             if let Some(client) = self.api_client.read().await.as_ref() {
-                let _ = client.send_channel_message(channel_id, 
+                let _ = client.send_channel_message(channel_id,
                     &format!("🎵 [{}/{}] **{}** - {}", index + 1, playlist.track_ids.len(), music.title, music.author)).await;
             }
 
@@ -938,7 +939,7 @@ impl BotEventHandler {
                     Err(e) => {
                         error!("获取用户语音频道失败: {}", e);
                         if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("❌ 获取语音频道信息失败: {}", e)).await;
                         }
                         return;
@@ -953,7 +954,7 @@ impl BotEventHandler {
             Some(vc) => vc,
             None => {
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         "⚠️ 你当前不在任何语音频道中\n请先加入一个语音频道").await;
                 }
                 return;
@@ -961,7 +962,7 @@ impl BotEventHandler {
         };
 
         if let Some(client) = self.api_client.read().await.as_ref() {
-            let _ = client.send_channel_message(channel_id, 
+            let _ = client.send_channel_message(channel_id,
                 &format!("🔍 正在搜索: **{}**", query)).await;
         }
 
@@ -969,17 +970,17 @@ impl BotEventHandler {
         match netease.get_or_search(query).await {
             Ok((song, url)) => {
                 let music = netease.to_music(&song);
-                
+
                 if netease.has_cookie() {
                     info!("✅ 使用已登录的网易云账号");
                 } else {
                     info!("⚠️ 未登录网易云账号，可能只能播放试听版本");
                 }
-                
+
                 match url {
                     Some(audio_url) => {
                         info!("获取到歌曲URL: {}", audio_url);
-                        
+
                         let local_file = match netease.download_song(&audio_url, song.id).await {
                             Ok(path) => {
                                 info!("歌曲下载成功: {}", path);
@@ -988,17 +989,17 @@ impl BotEventHandler {
                             Err(e) => {
                                 error!("下载歌曲失败: {}", e);
                                 if let Some(client) = self.api_client.read().await.as_ref() {
-                                    let _ = client.send_channel_message(channel_id, 
+                                    let _ = client.send_channel_message(channel_id,
                                         &format!("❌ 下载歌曲失败: {}", e)).await;
                                 }
                                 return;
                             }
                         };
-                        
+
                         // 加入语音频道并播放
                         if let Some((ip, port, streaming_info)) = self.join_voice_for_streaming(&vc.id, channel_id).await {
                             if let Some(client) = self.api_client.read().await.as_ref() {
-                                let _ = client.send_channel_message(channel_id, 
+                                let _ = client.send_channel_message(channel_id,
                                     &format!("🎵 正在播放: **{}** - {}", music.title, music.author)).await;
                             }
                             self.play_song(&local_file, &ip, port, &streaming_info).await;
@@ -1006,7 +1007,7 @@ impl BotEventHandler {
                     }
                     None => {
                         if let Some(client) = self.api_client.read().await.as_ref() {
-                            let _ = client.send_channel_message(channel_id, 
+                            let _ = client.send_channel_message(channel_id,
                                 &format!("❌ 无法获取 **{}** 的播放链接\n可能需要 VIP 或歌曲已下架", song.name)).await;
                         }
                     }
@@ -1015,7 +1016,7 @@ impl BotEventHandler {
             Err(e) => {
                 error!("搜索失败: {}", e);
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         &format!("❌ 搜索失败: {}", e)).await;
                 }
             }
@@ -1029,24 +1030,24 @@ impl BotEventHandler {
             // 先离开频道，确保获取新的推流地址
             let _ = api_client.leave_voice_channel(channel_id).await;
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            
+
             // 重新加入获取新的推流地址
             let conn_info = match api_client.join_voice_channel(channel_id).await {
                 Ok(info) => info,
                 Err(e) => {
                     warn!("加入语音失败: {}", e);
-                    let _ = api_client.send_channel_message(text_channel, 
+                    let _ = api_client.send_channel_message(text_channel,
                         &format!("❌ 加入语音频道失败: {}", e)).await;
                     return None;
                 }
             };
-            
+
             let ip = conn_info.ip.clone().unwrap_or_default();
             let port = conn_info.port.unwrap_or(0);
             info!("获取新推流地址: {}:{}", ip, port);
-            
+
             let bit_rate = conn_info.bitrate.unwrap_or(self.config.audio.bit_rate);
-            
+
             let streaming_info = VoiceStreamingInfo {
                 ip: ip.clone(),
                 port: port as u16,
@@ -1058,7 +1059,7 @@ impl BotEventHandler {
                 sample_rate: 48000,
                 channels: 2,
             };
-            
+
             return Some((ip, port as u16, streaming_info));
         }
         None
@@ -1090,7 +1091,7 @@ impl BotEventHandler {
     async fn generate_and_upload_qrcode(&self, url: &str) -> Option<String> {
         use qrcode::QrCode;
         use image::Luma;
-        
+
         let code = match QrCode::new(url) {
             Ok(c) => c,
             Err(e) => {
@@ -1098,17 +1099,17 @@ impl BotEventHandler {
                 return None;
             }
         };
-        
+
         let image = code.render::<Luma<u8>>().build();
         let mut buffer = std::io::Cursor::new(Vec::new());
-        
+
         if let Err(e) = image.write_to(&mut buffer, image::ImageFormat::Png) {
             warn!("编码二维码图片失败: {}", e);
             return None;
         }
-        
+
         let image_data = buffer.into_inner();
-        
+
         if let Some(client) = self.api_client.read().await.as_ref() {
             match client.upload_image(&image_data).await {
                 Ok(kook_url) => {
@@ -1120,74 +1121,74 @@ impl BotEventHandler {
                 }
             }
         }
-        
+
         None
     }
 
     async fn handle_wyylogin(&self, data: &MessageData) {
         let channel_id = &data.target_id;
-        
+
         if let Some(client) = self.api_client.read().await.as_ref() {
-            let _ = client.send_channel_message(channel_id, 
+            let _ = client.send_channel_message(channel_id,
                 "🔑 正在生成网易云登录二维码...").await;
         }
-        
+
         let netease = self.netease_client.read().await;
-        
+
         // 获取二维码 key
         let key = match netease.get_qr_key().await {
             Ok(key_data) => key_data.unikey,
             Err(e) => {
                 error!("获取二维码key失败: {}", e);
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         &format!("❌ 获取二维码失败: {}", e)).await;
                 }
                 return;
             }
         };
-        
+
         // 生成二维码
         let qr_code = match netease.create_qr_code(&key).await {
             Ok(qr) => qr,
             Err(e) => {
                 error!("生成二维码失败: {}", e);
                 if let Some(client) = self.api_client.read().await.as_ref() {
-                    let _ = client.send_channel_message(channel_id, 
+                    let _ = client.send_channel_message(channel_id,
                         &format!("❌ 生成二维码失败: {}", e)).await;
                 }
                 return;
             }
         };
-        
+
         // 本地生成二维码图片并上传到 Kook
         info!("开始生成并上传二维码图片...");
         let image_url = self.generate_and_upload_qrcode(&qr_code.qrurl).await;
         info!("二维码上传结果: {:?}", image_url);
-        
+
         // 发送二维码
         if let Some(client) = self.api_client.read().await.as_ref() {
             if let Some(ref url) = image_url {
                 info!("发送图片消息: {}", url);
                 let _ = client.send_image_message(channel_id, url).await;
-                let _ = client.send_channel_message(channel_id, 
+                let _ = client.send_channel_message(channel_id,
                     "📱 **请扫描上方二维码登录网易云音乐**\n⏰ 二维码有效期 5 分钟").await;
             } else {
                 warn!("二维码上传失败，发送链接");
-                let _ = client.send_channel_message(channel_id, 
+                let _ = client.send_channel_message(channel_id,
                     &format!(
                         "📱 **网易云登录**\n\n点击链接扫码：{}\n\n⏰ 二维码有效期 5 分钟",
                         qr_code.qrurl
                     )).await;
             }
         }
-        
+
         // 轮询检查登录状态
         let key_clone = key.clone();
         let channel_id_clone = channel_id.to_string();
         let api_client = self.api_client.clone();
         let netease_api_url = self.config.music.netease_api_url.clone();
-        
+
         tokio::spawn(async move {
             let netease_client = NeteaseClient::new(&netease_api_url);
             let config_path = std::path::PathBuf::from("config.toml");
@@ -1195,28 +1196,28 @@ impl BotEventHandler {
             let max_attempts = 60;
             let key_str = key_clone.clone();
             info!("启动登录检查任务，key: {}", key_str);
-            
+
             loop {
                 attempts += 1;
                 info!("检查登录状态... ({}/{}), key: {}", attempts, max_attempts, key_str);
-                
+
                 if attempts > max_attempts {
                     if let Some(client) = api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(&channel_id_clone, 
+                        let _ = client.send_channel_message(&channel_id_clone,
                             "⏰ 二维码已过期，请重新发送 `/wyylogin`").await;
                     }
                     break;
                 }
-                
+
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                
+
                 match netease_client.check_qr_status(&key_clone).await {
                     Ok(result) => {
                         info!("登录状态码: {}", result.code);
                         match result.code {
                             800 => {
                                 if let Some(client) = api_client.read().await.as_ref() {
-                                    let _ = client.send_channel_message(&channel_id_clone, 
+                                    let _ = client.send_channel_message(&channel_id_clone,
                                         "⏰ 二维码已过期，请重新发送 `/wyylogin`").await;
                                 }
                                 break;
@@ -1228,7 +1229,7 @@ impl BotEventHandler {
                             802 => {
                                 info!("已扫码，等待确认");
                                 if let Some(client) = api_client.read().await.as_ref() {
-                                    let _ = client.send_channel_message(&channel_id_clone, 
+                                    let _ = client.send_channel_message(&channel_id_clone,
                                         "✅ 已扫描，请在手机上确认登录").await;
                                 }
                             }
@@ -1239,14 +1240,14 @@ impl BotEventHandler {
                                         Ok(_) => {
                                             if let Some(client) = api_client.read().await.as_ref() {
                                                 let nickname = result.nickname.as_deref().unwrap_or("用户");
-                                                let _ = client.send_channel_message(&channel_id_clone, 
+                                                let _ = client.send_channel_message(&channel_id_clone,
                                                     &format!("🎉 登录成功！欢迎 **{}**\nCookie 已保存，请重启机器人后使用 `/wyy` 播放完整音质", nickname)).await;
                                             }
                                         }
                                         Err(e) => {
                                             error!("保存 cookie 失败: {}", e);
                                             if let Some(client) = api_client.read().await.as_ref() {
-                                                let _ = client.send_channel_message(&channel_id_clone, 
+                                                let _ = client.send_channel_message(&channel_id_clone,
                                                     &format!("⚠️ 登录成功，但保存 Cookie 失败: {}", e)).await;
                                             }
                                         }
