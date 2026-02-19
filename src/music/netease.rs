@@ -79,6 +79,13 @@ pub struct LoginResult {
     pub nickname: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlaylistDetail {
+    pub id: u64,
+    pub name: String,
+    pub track_ids: Vec<u64>,
+}
+
 impl NeteaseClient {
     pub fn new(base_url: &str) -> Self {
         let http = Client::builder()
@@ -105,6 +112,26 @@ impl NeteaseClient {
     
     pub fn has_cookie(&self) -> bool {
         self.cookie.is_some()
+    }
+    
+    /// 清理 cookie 字符串，移除 Max-Age, Expires, Path 等属性
+    fn clean_cookie(raw: &str) -> String {
+        raw.split(';')
+            .map(|s| s.trim())
+            .filter(|s| {
+                let s_lower = s.to_lowercase();
+                // 过滤掉属性字段
+                !s_lower.starts_with("max-age")
+                && !s_lower.starts_with("expires")
+                && !s_lower.starts_with("path=")
+                && !s_lower.starts_with("domain=")
+                && !s_lower.starts_with("secure")
+                && !s_lower.starts_with("httponly")
+                && !s_lower.starts_with("samesite")
+                && !s.is_empty()
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     /// 获取登录二维码 key
@@ -192,10 +219,10 @@ impl NeteaseClient {
         let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
         
         let cookie = if code == 803 {
-            // 登录成功，从响应中获取 cookie
+            // 登录成功，从响应中获取并清理 cookie
             json.get("cookie")
                 .and_then(|c| c.as_str())
-                .map(|s| s.to_string())
+                .map(|s| Self::clean_cookie(s))
         } else {
             None
         };
@@ -245,6 +272,112 @@ impl NeteaseClient {
         }
 
         None
+    }
+
+    /// 解析歌单 ID
+    pub fn parse_playlist_id(input: &str) -> Option<u64> {
+        // 尝试直接解析为数字ID
+        if let Ok(id) = input.parse::<u64>() {
+            return Some(id);
+        }
+
+        let patterns = [
+            // music.163.com/#/playlist?id=xxx
+            r"music\.163\.com/(?:#/)?playlist\?id=(\d+)",
+            // playlist?id=xxx
+            r"playlist\?id=(\d+)",
+        ];
+
+        for pattern in &patterns {
+            if let Ok(re) = Regex::new(pattern) {
+                if let Some(caps) = re.captures(input) {
+                    if let Some(m) = caps.get(1) {
+                        if let Ok(id) = m.as_str().parse::<u64>() {
+                            return Some(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 获取歌单详情
+    pub async fn get_playlist_detail(&self, playlist_id: u64) -> Result<PlaylistDetail> {
+        let url = format!("{}/playlist/detail", self.base_url);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        
+        let mut request = self.http
+            .get(&url)
+            .query(&[
+                ("id", &playlist_id.to_string()),
+                ("timestamp", &timestamp.to_string()),
+            ]);
+        
+        // 添加 cookie
+        if let Some(ref cookie) = self.cookie {
+            request = request.header("Cookie", cookie);
+        }
+        
+        let response = request.send().await?;
+        let json: serde_json::Value = response.json().await?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
+            warn!("歌单API返回错误: code={}, 响应: {}", code, json);
+            return Err(BotError::KookApiError {
+                code: code as i32,
+                message: format!("获取歌单失败: code={}", code),
+            });
+        }
+        
+        let playlist = json.get("playlist").ok_or_else(|| {
+            warn!("歌单响应中缺少 playlist 字段: {}", json);
+            BotError::KookApiError {
+                code: -1,
+                message: "歌单数据为空".to_string(),
+            }
+        })?;
+        
+        let name = playlist.get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("未知歌单")
+            .to_string();
+        
+        // 尝试从 trackIds 或 tracks 获取歌曲
+        let track_ids: Vec<u64> = if let Some(track_ids_json) = playlist.get("trackIds") {
+            track_ids_json.as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| {
+                            // trackIds 可能是数字或对象 {id: xxx, v: xxx}
+                            item.as_u64()
+                                .or_else(|| item.get("id")?.as_u64())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else if let Some(tracks) = playlist.get("tracks") {
+            tracks.as_array()
+                .map(|arr| arr.iter().filter_map(|t| t.get("id")?.as_u64()).collect())
+                .unwrap_or_default()
+        } else {
+            warn!("歌单数据中找不到 trackIds 或 tracks，playlist: {}", 
+                serde_json::to_string(playlist).unwrap_or_default());
+            Vec::new()
+        };
+        
+        info!("获取歌单 '{}' 成功，共 {} 首歌曲", name, track_ids.len());
+        
+        Ok(PlaylistDetail {
+            id: playlist_id,
+            name,
+            track_ids,
+        })
     }
 
     /// 搜索歌曲
@@ -396,6 +529,45 @@ impl NeteaseClient {
             .map(|s| s.to_string());
 
         Ok(url)
+    }
+    
+    /// 下载歌曲到临时文件
+    /// 返回本地文件路径
+    pub async fn download_song(&self, url: &str, song_id: u64) -> Result<String> {
+        let cache_dir = std::path::Path::new("./cache");
+        if !cache_dir.exists() {
+            std::fs::create_dir_all(cache_dir)?;
+        }
+        
+        let file_path = cache_dir.join(format!("{}.mp3", song_id));
+        
+        // 如果已存在且大于1KB，直接返回（避免重复下载）
+        if file_path.exists() {
+            if let Ok(meta) = std::fs::metadata(&file_path) {
+                if meta.len() > 1024 {
+                    info!("歌曲已缓存: {:?}", file_path);
+                    return Ok(file_path.to_string_lossy().to_string());
+                }
+            }
+        }
+        
+        info!("正在下载歌曲: {} -> {:?}", url, file_path);
+        
+        let request = self.http.get(url);
+        let response = self.add_cookie(request).send().await?;
+        
+        if !response.status().is_success() {
+            return Err(BotError::KookApiError {
+                code: response.status().as_u16() as i32,
+                message: format!("下载失败: {}", response.status()),
+            });
+        }
+        
+        let bytes = response.bytes().await?;
+        std::fs::write(&file_path, &bytes)?;
+        
+        info!("歌曲下载完成: {} bytes", bytes.len());
+        Ok(file_path.to_string_lossy().to_string())
     }
 
     /// 搜索或通过ID获取歌曲

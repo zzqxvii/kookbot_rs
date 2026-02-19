@@ -532,22 +532,52 @@ impl WebhookHandler for BotWebhookHandler {
 struct BotEventHandler {
     config: BotConfig,
     api_client: Arc<RwLock<Option<KookClient>>>,
-    netease_client: NeteaseClient,
+    netease_client: Arc<RwLock<NeteaseClient>>,
     voice_manager: Arc<Mutex<Option<VoiceManager>>>,
 }
 
 impl BotEventHandler {
     fn new(config: BotConfig, api_client: KookClient) -> Self {
+        // 清理 cookie 格式
+        let netease_cookie = config.music.netease_cookie.as_ref()
+            .map(|c| Self::clean_cookie(c));
+        
         let netease_client = NeteaseClient::with_cookie(
             &config.music.netease_api_url,
-            config.music.netease_cookie.clone(),
+            netease_cookie,
         );
+        
+        if netease_client.has_cookie() {
+            info!("已加载网易云登录凭证");
+        } else {
+            info!("未配置网易云登录凭证，可能只能播放试听版本");
+        }
+        
         Self {
             config,
             api_client: Arc::new(RwLock::new(Some(api_client))),
-            netease_client,
+            netease_client: Arc::new(RwLock::new(netease_client)),
             voice_manager: Arc::new(Mutex::new(None)),
         }
+    }
+    
+    /// 清理 cookie 字符串
+    fn clean_cookie(raw: &str) -> String {
+        raw.split(';')
+            .map(|s| s.trim())
+            .filter(|s| {
+                let s_lower = s.to_lowercase();
+                !s_lower.starts_with("max-age")
+                && !s_lower.starts_with("expires")
+                && !s_lower.starts_with("path=")
+                && !s_lower.starts_with("domain=")
+                && !s_lower.starts_with("secure")
+                && !s_lower.starts_with("httponly")
+                && !s_lower.starts_with("samesite")
+                && !s.is_empty()
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     fn parse_command<'a>(&self, content: &'a str) -> Option<(&'a str, Vec<&'a str>)> {
@@ -766,6 +796,141 @@ impl BotEventHandler {
         let query = args.join(" ");
         info!("处理 /wyy 命令: {}", query);
 
+        // 检查是否是歌单链接
+        if let Some(playlist_id) = NeteaseClient::parse_playlist_id(&query) {
+            info!("检测到歌单链接，ID: {}", playlist_id);
+            self.handle_wyy_playlist(data, playlist_id).await;
+            return;
+        }
+
+        // 单曲处理
+        self.handle_wyy_single(data, &query).await;
+    }
+
+    async fn handle_wyy_playlist(&self, data: &MessageData, playlist_id: u64) {
+        let channel_id = &data.target_id;
+        let guild_id = &data.extra.guild_id;
+        let user_id = &data.author_id;
+
+        // 获取歌单详情
+        let netease = self.netease_client.read().await;
+        let playlist = match netease.get_playlist_detail(playlist_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                error!("获取歌单失败: {}", e);
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        &format!("❌ 获取歌单失败: {}", e)).await;
+                }
+                return;
+            }
+        };
+
+        if playlist.track_ids.is_empty() {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(channel_id, "❌ 歌单为空").await;
+            }
+            return;
+        }
+
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            let _ = client.send_channel_message(channel_id, 
+                &format!("📋 **歌单：{}**\n共 {} 首歌曲，开始播放...", playlist.name, playlist.track_ids.len())).await;
+        }
+
+        // 获取用户语音频道
+        let voice_channel = {
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                match client.get_user_voice_channel(guild_id, user_id).await {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        error!("获取用户语音频道失败: {}", e);
+                        return;
+                    }
+                }
+            } else {
+                return;
+            }
+        };
+
+        let vc = match voice_channel {
+            Some(vc) => vc,
+            None => {
+                if let Some(client) = self.api_client.read().await.as_ref() {
+                    let _ = client.send_channel_message(channel_id, 
+                        "⚠️ 你当前不在任何语音频道中").await;
+                }
+                return;
+            }
+        };
+
+        // 逐首播放歌曲
+        for (index, track_id) in playlist.track_ids.iter().enumerate() {
+            let netease = self.netease_client.read().await;
+            
+            // 获取歌曲详情
+            let song = match netease.get_song_detail(*track_id).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("获取歌曲 {} 详情失败: {}", track_id, e);
+                    continue;
+                }
+            };
+
+            let music = netease.to_music(&song);
+
+            // 获取歌曲 URL
+            let audio_url = match netease.get_song_url(*track_id).await {
+                Ok(Some(url)) => url,
+                Ok(None) => {
+                    warn!("歌曲 {} 无法获取播放链接", song.name);
+                    continue;
+                }
+                Err(e) => {
+                    warn!("获取歌曲 {} URL 失败: {}", song.name, e);
+                    continue;
+                }
+            };
+
+            // 下载歌曲
+            let local_file = match netease.download_song(&audio_url, *track_id).await {
+                Ok(path) => path,
+                Err(e) => {
+                    warn!("下载歌曲 {} 失败: {}", song.name, e);
+                    continue;
+                }
+            };
+
+            drop(netease); // 释放锁
+
+            // 发送播放消息
+            if let Some(client) = self.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(channel_id, 
+                    &format!("🎵 [{}/{}] **{}** - {}", index + 1, playlist.track_ids.len(), music.title, music.author)).await;
+            }
+
+            // 每首歌播放前重新获取推流地址（Kook 限制：同一端口只能推流一次）
+            let (ip, port, streaming_info) = match self.join_voice_for_streaming(&vc.id, channel_id).await {
+                Some(info) => info,
+                None => break,
+            };
+
+            // 播放歌曲
+            if !self.play_song(&local_file, &ip, port, &streaming_info).await {
+                break;
+            }
+        }
+
+        if let Some(client) = self.api_client.read().await.as_ref() {
+            let _ = client.send_channel_message(channel_id, "✅ 歌单播放完毕").await;
+        }
+    }
+
+    async fn handle_wyy_single(&self, data: &MessageData, query: &str) {
+        let channel_id = &data.target_id;
+        let guild_id = &data.extra.guild_id;
+        let user_id = &data.author_id;
+
         let voice_channel = {
             if let Some(client) = self.api_client.read().await.as_ref() {
                 match client.get_user_voice_channel(guild_id, user_id).await {
@@ -800,74 +965,43 @@ impl BotEventHandler {
                 &format!("🔍 正在搜索: **{}**", query)).await;
         }
 
-        match self.netease_client.get_or_search(&query).await {
+        let netease = self.netease_client.read().await;
+        match netease.get_or_search(query).await {
             Ok((song, url)) => {
-                let music = self.netease_client.to_music(&song);
+                let music = netease.to_music(&song);
+                
+                if netease.has_cookie() {
+                    info!("✅ 使用已登录的网易云账号");
+                } else {
+                    info!("⚠️ 未登录网易云账号，可能只能播放试听版本");
+                }
                 
                 match url {
                     Some(audio_url) => {
                         info!("获取到歌曲URL: {}", audio_url);
                         
-                        if let Some(api_client) = self.api_client.read().await.as_ref() {
-                            let mut conn_info = None;
-                            
-                            // 尝试加入语音频道
-                            match api_client.join_voice_channel(&vc.id).await {
-                                Ok(info) => conn_info = Some(info),
-                                Err(e) => {
-                                    // 如果失败，尝试先离开再加入
-                                    warn!("加入语音失败 ({})，尝试先离开...", e);
-                                    let _ = api_client.leave_voice_channel(&vc.id).await;
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                                    conn_info = api_client.join_voice_channel(&vc.id).await.ok();
-                                }
+                        let local_file = match netease.download_song(&audio_url, song.id).await {
+                            Ok(path) => {
+                                info!("歌曲下载成功: {}", path);
+                                path
                             }
-                            
-                            if let Some(conn_info) = conn_info {
-                                let ip = conn_info.ip.clone().unwrap_or_default();
-                                let port = conn_info.port.unwrap_or(0);
-                                info!("成功加入语音频道: {}:{}", ip, port);
-                                
-                                let bit_rate = conn_info.bitrate.unwrap_or(self.config.audio.bit_rate);
-                                info!("使用比特率: {}kbps", bit_rate / 1000);
-                                
-                                let streaming_info = VoiceStreamingInfo {
-                                    ip: ip.clone(),
-                                    port: port as u16,
-                                    rtcp_port: conn_info.rtcp_port.map(|p| p as u16).unwrap_or(port as u16 + 1),
-                                    rtcp_mux: conn_info.rtcp_mux.unwrap_or(true),
-                                    ssrc: conn_info.audio_ssrc.map(|s| s as u32).unwrap_or(1111),
-                                    pt: conn_info.audio_pt.map(|p| p as u8).unwrap_or(111),
-                                    bit_rate,
-                                    sample_rate: 48000,
-                                    channels: 2,
-                                };
-
-                                let mut streamer = FFmpegDirectStreamer::new(
-                                    StreamerConfig::from(&streaming_info)
-                                ).unwrap();
-                                
-                                if let Some(api_client) = self.api_client.read().await.as_ref() {
-                                    let _ = api_client.send_channel_message(channel_id, 
-                                        &format!("🎵 正在播放: **{}** - {}", music.title, music.author)).await;
+                            Err(e) => {
+                                error!("下载歌曲失败: {}", e);
+                                if let Some(client) = self.api_client.read().await.as_ref() {
+                                    let _ = client.send_channel_message(channel_id, 
+                                        &format!("❌ 下载歌曲失败: {}", e)).await;
                                 }
-
-                                match streamer.start_stream_url(&audio_url, &ip, port as u16, streaming_info.rtcp_port) {
-                                    Ok(_) => {
-                                        let _ = streamer.wait();
-                                    }
-                                    Err(e) => {
-                                        error!("推流失败: {}", e);
-                                        if let Some(api_client) = self.api_client.read().await.as_ref() {
-                                            let _ = api_client.send_channel_message(channel_id, 
-                                                &format!("❌ 推流失败: {}", e)).await;
-                                        }
-                                    }
-                                }
-                            } else {
-                                let _ = api_client.send_channel_message(channel_id, 
-                                    "❌ 加入语音频道失败，请稍后重试").await;
+                                return;
                             }
+                        };
+                        
+                        // 加入语音频道并播放
+                        if let Some((ip, port, streaming_info)) = self.join_voice_for_streaming(&vc.id, channel_id).await {
+                            if let Some(client) = self.api_client.read().await.as_ref() {
+                                let _ = client.send_channel_message(channel_id, 
+                                    &format!("🎵 正在播放: **{}** - {}", music.title, music.author)).await;
+                            }
+                            self.play_song(&local_file, &ip, port, &streaming_info).await;
                         }
                     }
                     None => {
@@ -884,6 +1018,70 @@ impl BotEventHandler {
                     let _ = client.send_channel_message(channel_id, 
                         &format!("❌ 搜索失败: {}", e)).await;
                 }
+            }
+        }
+    }
+
+    /// 加入语音频道并返回流信息
+    /// 每次调用都会重新获取推流地址（Kook 限制同一端口只能推流一次）
+    async fn join_voice_for_streaming(&self, channel_id: &str, text_channel: &str) -> Option<(String, u16, VoiceStreamingInfo)> {
+        if let Some(api_client) = self.api_client.read().await.as_ref() {
+            // 先离开频道，确保获取新的推流地址
+            let _ = api_client.leave_voice_channel(channel_id).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            
+            // 重新加入获取新的推流地址
+            let conn_info = match api_client.join_voice_channel(channel_id).await {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!("加入语音失败: {}", e);
+                    let _ = api_client.send_channel_message(text_channel, 
+                        &format!("❌ 加入语音频道失败: {}", e)).await;
+                    return None;
+                }
+            };
+            
+            let ip = conn_info.ip.clone().unwrap_or_default();
+            let port = conn_info.port.unwrap_or(0);
+            info!("获取新推流地址: {}:{}", ip, port);
+            
+            let bit_rate = conn_info.bitrate.unwrap_or(self.config.audio.bit_rate);
+            
+            let streaming_info = VoiceStreamingInfo {
+                ip: ip.clone(),
+                port: port as u16,
+                rtcp_port: conn_info.rtcp_port.map(|p| p as u16).unwrap_or(port as u16 + 1),
+                rtcp_mux: conn_info.rtcp_mux.unwrap_or(true),
+                ssrc: conn_info.audio_ssrc.map(|s| s as u32).unwrap_or(1111),
+                pt: conn_info.audio_pt.map(|p| p as u8).unwrap_or(111),
+                bit_rate,
+                sample_rate: 48000,
+                channels: 2,
+            };
+            
+            return Some((ip, port as u16, streaming_info));
+        }
+        None
+    }
+
+    /// 播放歌曲文件
+    async fn play_song(&self, file_path: &str, ip: &str, port: u16, streaming_info: &VoiceStreamingInfo) -> bool {
+        let mut streamer = match FFmpegDirectStreamer::new(StreamerConfig::from(streaming_info)) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("创建流处理器失败: {}", e);
+                return false;
+            }
+        };
+
+        match streamer.start_stream_url(file_path, ip, port, streaming_info.rtcp_port) {
+            Ok(_) => {
+                let _ = streamer.wait();
+                true
+            }
+            Err(e) => {
+                error!("推流失败: {}", e);
+                false
             }
         }
     }
@@ -934,8 +1132,10 @@ impl BotEventHandler {
                 "🔑 正在生成网易云登录二维码...").await;
         }
         
+        let netease = self.netease_client.read().await;
+        
         // 获取二维码 key
-        let key = match self.netease_client.get_qr_key().await {
+        let key = match netease.get_qr_key().await {
             Ok(key_data) => key_data.unikey,
             Err(e) => {
                 error!("获取二维码key失败: {}", e);
@@ -948,7 +1148,7 @@ impl BotEventHandler {
         };
         
         // 生成二维码
-        let qr_code = match self.netease_client.create_qr_code(&key).await {
+        let qr_code = match netease.create_qr_code(&key).await {
             Ok(qr) => qr,
             Err(e) => {
                 error!("生成二维码失败: {}", e);
