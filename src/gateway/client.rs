@@ -84,8 +84,18 @@ impl GatewayClient {
         info!("Intents: {}", self.intents);
         info!("========================================");
 
+        // 检查 WebSocket 流是否存在
+        let stream_exists = self.ws_stream.read().await.is_some();
+        info!("WebSocket 流状态: {}", if stream_exists { "存在" } else { "不存在" });
+        
+        if !stream_exists {
+            error!("WebSocket 流不存在，无法运行");
+            return Err(BotError::GatewayError("WebSocket 流不存在".to_string()));
+        }
+
         let mut heartbeat_tick = interval(Duration::from_secs(30));
         let mut need_heartbeat = true;
+        let mut message_count = 0u32;
 
         loop {
             if !*self.running.read().await {
@@ -101,35 +111,67 @@ impl GatewayClient {
                 }
 
                 message_result = self.receive_message() => {
+                    message_count += 1;
+                    info!("[消息 #{}] 接收结果: {}", message_count, 
+                        if message_result.is_some() { "有数据" } else { "无数据" });
+                    
                     if let Some(msg) = message_result {
                         self.handle_message(msg).await;
+                    } else {
+                        // 检查是否因为连接断开
+                        let running = *self.running.read().await;
+                        let stream_exists = self.ws_stream.read().await.is_some();
+                        info!("消息接收返回 None，running={}, stream_exists={}", running, stream_exists);
                     }
                 }
             }
         }
 
-        info!("Gateway 客户端停止运行");
+        info!("Gateway 客户端停止运行，共接收 {} 条消息", message_count);
         Ok(())
     }
 
     async fn receive_message(&self) -> Option<Message> {
+        info!("尝试接收消息...");
+        
+        // 使用 read 锁而不是 write 锁，避免阻塞其他操作
+        let stream_opt = {
+            let guard = self.ws_stream.read().await;
+            guard.as_ref().map(|_| ())  // 只检查是否存在
+        };
+        
+        if stream_opt.is_none() {
+            warn!("WebSocket 流不存在");
+            return None;
+        }
+        
+        // 现在获取 write 锁来读取消息
         let mut stream_guard = self.ws_stream.write().await;
         if let Some(ref mut stream) = *stream_guard {
+            info!("等待 WebSocket 消息 (超时: 5秒)...");
+            
             match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
-                Ok(Some(Ok(msg))) => Some(msg),
+                Ok(Some(Ok(msg))) => {
+                    info!("收到 WebSocket 消息: {:?}", msg);
+                    Some(msg)
+                }
                 Ok(Some(Err(e))) => {
                     error!("WebSocket 读取错误: {}", e);
-                    None
-                }
-                Ok(None) => {
-                    warn!("WebSocket 连接已关闭 (收到 None)");
                     *self.running.write().await = false;
                     None
                 }
-                Err(_) => None,
+                Ok(None) => {
+                    warn!("WebSocket 连接已关闭 (stream.next() 返回 None)");
+                    *self.running.write().await = false;
+                    None
+                }
+                Err(_) => {
+                    info!("接收消息超时 (5秒)");
+                    None
+                }
             }
         } else {
-            warn!("WebSocket 流不存在");
+            warn!("WebSocket 流在检查时存在但读取时消失");
             None
         }
     }

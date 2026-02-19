@@ -1,21 +1,23 @@
-# Kook Music Bot (RKM) 🎵
+# Kook Bot (RKM) 🤖
 
 [![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
-用 Rust 编写的 Kook 语音音乐机器人，参考 Java 版本实现，具有更低的资源占用和更快的启动速度。
+用 Rust 编写的高性能 Kook 机器人框架，采用模块化设计，支持多种功能扩展。
 
-## ✨ 功能特性
+> **注意**: 本项目定位为通用的 Kook Bot 平台，音乐播放只是内置的其中一个功能模块。通过命令系统，可以轻松添加更多功能模块。
 
-- 🎶 **音乐播放**：支持网易云音乐搜索和播放
-- 📋 **队列管理**：完整的播放队列、播放列表、预加载机制
-- 🎙️ **语音支持**：完整的语音频道加入/离开功能
-- 🔄 **双模式连接**：
+## ✨ 核心特性
+
+- 🧩 **模块化命令系统**: 可插拔的命令处理器，支持动态注册/注销
+- 🎶 **音乐模块** (内置): 支持网易云音乐搜索和播放
+- 🎙️ **语音支持**: 完整的语音频道加入/离开功能
+- 🔄 **双模式连接**:
   - **WebSocket 模式** - 主动连接到 Kook Gateway
   - **Webhook 模式** - 被动接收 Kook 推送的事件
-- 🎵 **高音质**：支持 Opus 编码，可配置比特率和采样率
-- ⚙️ **灵活配置**：完善的 TOML 配置系统
+- ⚡ **高性能**: Rust 原生实现，内存占用低 (~50MB)，启动快速
+- ⚙️ **灵活配置**: 完善的 TOML 配置系统
 
 ## 🛠️ 技术栈
 
@@ -32,7 +34,7 @@
 ## 📦 依赖项
 
 - **Rust** 1.75+ （推荐最新稳定版）
-- **FFmpeg** （用于 Opus 音频编码）
+- **FFmpeg** （音乐模块需要，用于 Opus 音频编码）
 
 ### 安装 FFmpeg
 
@@ -68,10 +70,6 @@ cargo build --release
 ### 2. 创建配置文件
 
 ```bash
-# 方式1: 使用命令生成
-cargo run --release -- --init
-
-# 方式2: 手动复制
 cp config.example.toml config.toml
 ```
 
@@ -97,7 +95,7 @@ bit_rate = 64000
 sample_rate = 48000
 channels = 2
 
-[music_source]
+[music]
 cache_dir = "./cache"
 max_cache_size = 1024
 ```
@@ -119,9 +117,6 @@ cargo run --release
 
 # 指定配置文件
 cargo run --release -- --config /path/to/config.toml
-
-# 测试 FFmpeg 可用性
-cargo run -- --test-ffmpeg
 ```
 
 ## 💬 使用方法
@@ -133,37 +128,70 @@ cargo run -- --test-ffmpeg
 | `!help` | `!h` | 显示帮助信息 | `!help` |
 | `!join` | `!j` | 加入你的语音频道 | `!join` |
 | `!leave` | `!l` | 离开语音频道 | `!leave` |
-| `!play` | `!p` | 搜索并播放音乐 | `!play 晴天` |
-| `!search` | `!s` | 搜索音乐 | `!search 周杰伦` |
-| `!skip` | - | 下一首 | `!skip` |
-| `!queue` | `!q` | 查看播放队列 | `!queue` |
+| `!wyy` | - | 播放网易云音乐 | `!wyy 晴天` |
+| `!wyylogin` | - | 登录网易云账号 | `!wyylogin` |
+
+## 🧩 模块化架构
+
+项目采用模块化设计，命令系统支持动态扩展：
+
+```rust
+// 创建自定义命令
+pub struct MyCommand;
+
+#[async_trait]
+impl CommandHandler for MyCommand {
+    fn name(&self) -> &'static str { "mycmd" }
+    fn description(&self) -> &'static str { "我的自定义命令" }
+    
+    async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
+        CommandResult::Reply("Hello!".to_string())
+    }
+}
+
+// 注册命令
+router.register(Arc::new(MyCommand));
+```
+
+### 模块列表
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| `bot/commands` | ✅ 核心 | 命令路由系统 |
+| `bot/music` | ✅ 内置 | 网易云音乐播放 |
+| `api` | ✅ 核心 | Kook API 客户端 |
+| `gateway` | ✅ 核心 | WebSocket 连接 |
+| `webhook` | ✅ 核心 | Webhook 服务器 |
+| `audio` | ✅ 核心 | 音频处理 |
+| `player` | ✅ 核心 | 播放控制 |
 
 ## 📁 项目结构
 
 ```
 RKM/
 ├── Cargo.toml              # Rust 项目配置
-├── Cargo.lock              # 依赖锁定文件
 ├── config.example.toml     # 配置示例
 ├── config.toml             # 本地配置文件 (gitignored)
 ├── src/
-│   ├── main.rs             # 程序入口
-│   ├── lib.rs              # 库模块导出
+│   ├── main.rs             # 程序入口（仅启动逻辑）
+│   ├── lib.rs              # 模块导出
+│   ├── bot/                # Bot 核心模块
+│   │   ├── mod.rs          # Bot 主逻辑
+│   │   ├── commands.rs     # 命令系统
+│   │   └── music.rs        # 音乐模块命令
+│   ├── api/                # Kook REST API
+│   ├── audio/              # 音频处理
+│   ├── gateway/            # WebSocket 网关
+│   ├── music/              # 音乐源 API
+│   ├── player/             # 播放控制
+│   ├── webhook/            # Webhook 服务器
 │   ├── config.rs           # 配置管理
 │   ├── error.rs            # 错误定义
+│   ├── logging.rs          # 日志系统
 │   ├── models.rs           # 数据模型
-│   ├── utils.rs            # 工具函数
-│   ├── queue.rs            # 播放队列
-│   ├── playlist.rs         # 播放列表
-│   ├── preloader.rs        # 预加载器
-│   ├── voice.rs            # 语音管理
-│   ├── api/                # Kook REST API
-│   ├── audio/              # 音频处理模块
-│   ├── gateway/            # WebSocket 网关
-│   ├── music_api/          # 音乐平台 API
-│   └── webhook/            # Webhook 接收模块
-├── target/                 # 编译输出目录
-└── cache/                  # 音乐缓存目录
+│   └── utils.rs            # 工具函数
+├── target/                 # 编译输出
+└── cache/                  # 音乐缓存
 ```
 
 ## ⚙️ 配置详解
@@ -212,17 +240,6 @@ sample_rate = 48000
 channels = 2
 ```
 
-## 🔄 与 Java 版本的对比
-
-| 特性 | Java 版本 | Rust 版本 (RKM) |
-|------|----------|----------------|
-| 运行环境 | JVM | 原生二进制 |
-| 内存占用 | 较高 (~200MB+) | 较低 (~50MB) |
-| 启动速度 | 较慢 (~5-10s) | 快速 (~1-2s) |
-| 音频解码 | Java 库 | Symphonia (Rust 原生) |
-| 部署依赖 | 需要 JRE | 单一可执行文件 |
-| 性能 | 良好 | 优秀 |
-
 ## 🐛 故障排除
 
 ### 机器人无法连接到 Kook
@@ -238,7 +255,7 @@ channels = 2
 ffmpeg -version
 
 # 如果不在 PATH 中，在 config.toml 中指定路径
-[music_source]
+[music]
 ffmpeg_path = "/usr/bin/ffmpeg"
 ```
 
