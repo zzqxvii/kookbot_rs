@@ -1,7 +1,7 @@
 use crate::core::error::{BotError, Result};
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// FFmpeg Opus 编码器配置
 #[derive(Debug, Clone)]

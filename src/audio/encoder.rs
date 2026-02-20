@@ -107,7 +107,7 @@ impl OpusEncoder {
     /// 编码剩余数据（用于文件末尾）
     pub fn encode_final(&mut self, pcm: &[i16]) -> Result<Vec<u8>> {
         // 填充到完整帧
-        let padding = self.frame_size.saturating_sub(pcm.len());
+        let _padding = self.frame_size.saturating_sub(pcm.len());
         let mut full_frame = Vec::with_capacity(self.frame_size);
         full_frame.extend_from_slice(pcm);
         full_frame.resize(self.frame_size, 0);

@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::api::KookClient;
 use crate::common::play_state;
@@ -27,7 +27,7 @@ use serde_json::Value;
 pub mod commands;
 pub mod music;
 
-use commands::{CommandContext, CommandResult, CommandRouter};
+use commands::{CommandResult, CommandRouter};
 use music::{create_music_commands, HelpCommand, JoinCommand, LeaveCommand};
 
 /// Bot 核心结构体

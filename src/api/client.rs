@@ -1,6 +1,6 @@
 use crate::core::config::BotConfig;
 use crate::core::error::{BotError, Result};
-use crate::common::models::{JoinedChannel, KookResponse, User, VoiceConnectionInfo};
+use crate::common::models::{KookResponse, User, VoiceConnectionInfo};
 use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde_json::json;

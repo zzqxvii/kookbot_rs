@@ -10,13 +10,13 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 use crate::core::config::BotConfig;
 use crate::music::NeteaseClient;
-use crate::player::{VoiceManager, VoiceStreamingInfo};
+use crate::player::VoiceStreamingInfo;
 use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
 
 /// 帮助命令

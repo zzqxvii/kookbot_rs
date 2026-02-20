@@ -1,5 +1,5 @@
 use crate::audio::decoder::AudioDecoder;
-use crate::audio::ffmpeg_encoder::{FFmpegOpusConfig, FFmpegOpusEncoder};
+use crate::audio::ffmpeg_encoder::FFmpegOpusEncoder;
 use crate::audio::ffmpeg_streamer::{FFmpegDirectStreamer, StreamerConfig};
 use crate::audio::rtp::{RtpSender, RtpStats};
 use crate::core::config::{AudioConfig, NetworkConfig};
@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, warn};
 
 /// 音频流处理器
 /// 负责将音频文件解码、编码并通过 RTP 发送

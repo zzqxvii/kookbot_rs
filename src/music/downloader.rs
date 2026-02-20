@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// 下载进度回调
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send + Sync>;

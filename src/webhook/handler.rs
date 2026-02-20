@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// Webhook 请求体
 #[derive(Debug, Clone, Deserialize, Serialize)]

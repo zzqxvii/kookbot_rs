@@ -1,7 +1,7 @@
 use crate::core::error::{BotError, Result};
 use std::net::UdpSocket;
 use std::time::Instant;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{info, trace, warn};
 
 /// RTP 包结构
 #[derive(Debug, Clone)]
