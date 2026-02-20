@@ -19,10 +19,10 @@ symphonia-core = "0.5.4"
 # opus = "0.3"
 
 # HTTP 客户端 - 用于 Kook API
-reqwest = { version = "0.11", features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.13", features = ["json", "multipart", "stream", "rustls", "query"] }
 
 # WebSocket 客户端 - 用于 Kook 实时事件
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # 压缩支持
@@ -93,8 +93,8 @@ name = "kook-music-bot"
 path = "src/main.rs"
 
 [profile.release]
-opt-level = 3
-lto = "thin"
+opt-level = "z"
+lto = true
 codegen-units = 1
 strip = true
 panic = "abort"

@@ -276,7 +276,7 @@ impl GatewayClient {
 
         let mut stream = self.ws_stream.write().await;
         if let Some(ref mut s) = *stream {
-            if let Err(e) = s.send(Message::Text(identify.to_string())).await {
+            if let Err(e) = s.send(Message::Text(identify.to_string().into())).await {
                 error!("Identify 发送失败: {}", e);
                 *self.running.write().await = false;
             }
@@ -292,7 +292,7 @@ impl GatewayClient {
 
         let mut stream = self.ws_stream.write().await;
         if let Some(ref mut s) = *stream {
-            if let Err(e) = s.send(Message::Text(heartbeat.to_string())).await {
+            if let Err(e) = s.send(Message::Text(heartbeat.to_string().into())).await {
                 error!("心跳发送失败: {}", e);
             }
         }
@@ -302,7 +302,7 @@ impl GatewayClient {
         let pong = GatewayMessage::pong();
         let mut stream = self.ws_stream.write().await;
         if let Some(ref mut s) = *stream {
-            if let Err(e) = s.send(Message::Text(serde_json::to_string(&pong).unwrap_or_default())).await {
+            if let Err(e) = s.send(Message::Text(serde_json::to_string(&pong).unwrap_or_default().into())).await {
                 error!("发送 Pong 失败: {}", e);
             }
         }
