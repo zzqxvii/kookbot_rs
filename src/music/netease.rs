@@ -1,5 +1,5 @@
 use crate::core::error::{BotError, Result};
-use crate::player::Music;
+use crate::player::{Music, Sender};
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
@@ -613,6 +613,7 @@ impl NeteaseClient {
             platform: "网易云".to_string(),
             source_url: Some(format!("https://music.163.com/#/song?id={}", song.id)),
             duration: Some(song.duration / 1000),
+            sender: Sender::default(),
         }
     }
 }

@@ -15,47 +15,15 @@
 //! }
 //! ```
 //!
-//! ## 事件主要格式 (d 字段内容)
+//! ## 事件类型判断逻辑
 //!
-//! | 字段 | 类型 | 说明 |
-//! |------|------|------|
-//! | channel_type | string | 消息通道类型: GROUP(组播), PERSON(单播), BROADCAST(广播) |
-//! | type | int | 消息类型: 1=文字, 2=图片, 3=视频, 4=文件, 8=音频, 9=KMarkdown, 10=Card, 255=系统消息 |
-//! | target_id | string | 发送目的: 频道消息时为 channel_id，系统消息时为 guild_id |
-//! | author_id | string | 发送者 id，1 代表系统 |
-//! | content | string | 消息内容，文件/图片/视频时为 url |
-//! | msg_id | string | 消息 id |
-//! | msg_timestamp | int | 消息发送时间的毫秒时间戳 |
-//! | nonce | string | 随机串 |
-//! | extra | object | 额外信息，不同消息类型结构不同 |
-//!
-//! ## 文字频道消息 extra 说明 (type 非 255)
-//!
-//! | 字段 | 类型 | 说明 |
-//! |------|------|------|
-//! | type | int | 同上面 type |
-//! | guild_id | string | 服务器 id |
-//! | channel_name | string | 频道名 |
-//! | mention | Array | 提及到的用户 id 列表 |
-//! | mention_all | boolean | 是否 mention 所有用户 |
-//! | mention_roles | Array | mention 用户角色的数组 |
-//! | mention_here | boolean | 是否 mention 在线用户 |
-//! | author | Map | 用户信息 |
-//!
-//! ## 系统事件消息 extra 说明 (type=255)
-//!
-//! | 字段 | 类型 | 说明 |
-//! |------|------|------|
-//! | type | string | 事件类型标识 |
-//! | body | Map | 事件关联的具体数据 |
+//! 1. extra.type == "12" -> ItemConsumedEvent (道具消耗)
+//! 2. extra.type 在 EventTypeMap 中 -> 系统事件 (type=255)
+//! 3. extra.type 是数字 (1-10) -> 普通消息事件
 
 use serde::{Deserialize, Serialize};
 
 /// 消息通道类型
-///
-/// - GROUP: 组播消息 (频道消息)
-/// - PERSON: 单播消息 (私聊)
-/// - BROADCAST: 广播消息
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ChannelType {
     GROUP,
@@ -64,18 +32,7 @@ pub enum ChannelType {
 }
 
 /// 消息类型
-///
-/// | 值 | 类型 | 说明 |
-/// |----|------|------|
-/// | 1 | Text | 文字消息 |
-/// | 2 | Image | 图片消息 |
-/// | 3 | Video | 视频消息 |
-/// | 4 | File | 文件消息 |
-/// | 8 | Audio | 音频消息 |
-/// | 9 | KMarkdown | KMarkdown 消息 |
-/// | 10 | Card | Card 消息 |
-/// | 255 | System | 系统消息 |
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum MessageType {
     Text = 1,
     Image = 2,
@@ -99,7 +56,13 @@ impl<'de> Deserialize<'de> for MessageType {
             serde_json::Value::String(s) => s.parse().unwrap_or(0),
             _ => 0,
         };
-        Ok(match num {
+        Ok(Self::from(num as u8))
+    }
+}
+
+impl From<u8> for MessageType {
+    fn from(value: u8) -> Self {
+        match value {
             1 => MessageType::Text,
             2 => MessageType::Image,
             3 => MessageType::Video,
@@ -109,24 +72,15 @@ impl<'de> Deserialize<'de> for MessageType {
             10 => MessageType::Card,
             255 => MessageType::System,
             _ => MessageType::Unknown,
-        })
+        }
     }
 }
 
-impl Serialize for MessageType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_i32(*self as i32)
-    }
-}
-
-/// 事件处理器 trait
+/// 事件处理器 Trait
 ///
-/// 实现此 trait 来处理接收到的 Kook 事件。
+/// 实现此 trait 以处理各种事件。
 ///
-/// # Example
+/// # 示例
 ///
 /// ```rust,ignore
 /// struct MyHandler;
@@ -135,6 +89,10 @@ impl Serialize for MessageType {
 /// impl EventHandler for MyHandler {
 ///     async fn on_message(&self, data: MessageData) {
 ///         println!("收到消息: {}", data.content);
+///     }
+///
+///     async fn on_button_click(&self, data: ButtonClickData) {
+///         println!("按钮被点击: {}", data.extra.body.value);
 ///     }
 /// }
 /// ```
@@ -145,6 +103,11 @@ pub trait EventHandler: Send + Sync {
         match event {
             Event::Message(data) => self.on_message(data).await,
             Event::SystemMessage(data) => self.on_system_message(data).await,
+            Event::ButtonClick(data) => self.on_button_click(data).await,
+            Event::UserJoinVoice(data) => self.on_user_join_voice(data).await,
+            Event::UserLeaveVoice(data) => self.on_user_leave_voice(data).await,
+            Event::UserAddReaction(data) => self.on_user_add_reaction(data).await,
+            Event::UserRemoveReaction(data) => self.on_user_remove_reaction(data).await,
             Event::Unknown(data) => self.on_unknown(data).await,
         }
     }
@@ -155,6 +118,21 @@ pub trait EventHandler: Send + Sync {
     /// 收到系统事件 (type: 255)
     async fn on_system_message(&self, _data: SystemMessageData) {}
 
+    /// 按钮点击事件 (extra.type: message_btn_click)
+    async fn on_button_click(&self, _data: ButtonClickData) {}
+
+    /// 用户加入语音频道 (extra.type: joined_channel)
+    async fn on_user_join_voice(&self, _data: VoiceChannelEventData) {}
+
+    /// 用户离开语音频道 (extra.type: exited_channel)
+    async fn on_user_leave_voice(&self, _data: VoiceChannelEventData) {}
+
+    /// 用户添加表情 (extra.type: added_reaction)
+    async fn on_user_add_reaction(&self, _data: ReactionEventData) {}
+
+    /// 用户删除表情 (extra.type: deleted_reaction)
+    async fn on_user_remove_reaction(&self, _data: ReactionEventData) {}
+
     /// 收到未知类型事件
     async fn on_unknown(&self, _data: serde_json::Value) {}
 }
@@ -164,31 +142,23 @@ pub trait EventHandler: Send + Sync {
 pub enum Event {
     /// 消息事件 (type: 1=文字, 2=图片, 3=视频, 4=文件, 8=音频, 9=KMarkdown, 10=Card)
     Message(MessageData),
-    /// 系统事件 (type: 255)
+    /// 系统事件 (type: 255, 未识别的具体类型)
     SystemMessage(SystemMessageData),
+    /// 按钮点击事件
+    ButtonClick(ButtonClickData),
+    /// 用户加入语音频道
+    UserJoinVoice(VoiceChannelEventData),
+    /// 用户离开语音频道
+    UserLeaveVoice(VoiceChannelEventData),
+    /// 用户添加表情
+    UserAddReaction(ReactionEventData),
+    /// 用户删除表情
+    UserRemoveReaction(ReactionEventData),
     /// 未知事件
     Unknown(serde_json::Value),
 }
 
 /// 消息数据 (s=0, type 非255)
-///
-/// 包含用户发送的聊天消息详细信息。
-///
-/// # 示例
-///
-/// ```json
-/// {
-///   "channel_type": "GROUP",
-///   "type": 1,
-///   "target_id": "123456789",
-///   "author_id": "987654321",
-///   "content": "Hello World",
-///   "msg_id": "abc-def-ghi",
-///   "msg_timestamp": 1234567890123,
-///   "nonce": "random-string",
-///   "extra": { ... }
-/// }
-/// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageData {
     /// 消息通道类型: GROUP/PERSON/BROADCAST
@@ -196,32 +166,30 @@ pub struct MessageData {
     /// 消息类型: 1=文字, 2=图片, 3=视频, 4=文件, 8=音频, 9=KMarkdown, 10=Card
     #[serde(rename = "type")]
     pub msg_type: MessageType,
-    /// 目标ID: 频道消息时为 channel_id，系统消息时为 guild_id
+    /// 目标ID: 频道消息时为 channel_id
     pub target_id: String,
-    /// 发送者ID (1 代表系统)
+    /// 发送者ID
     pub author_id: String,
-    /// 消息内容 (文件/图片/视频时为 url)
+    /// 消息内容
     pub content: String,
     /// 消息ID
     pub msg_id: String,
     /// 消息发送时间的毫秒时间戳
     pub msg_timestamp: i64,
-    /// 随机串，与用户消息发送 API 中传的 nonce 保持一致
+    /// 随机串
     #[serde(default)]
     pub nonce: String,
-    /// 额外信息 (不同消息类型结构不同)
+    /// 额外信息
     pub extra: MessageExtra,
-    /// 其他未知字段 (用于兼容 API 变更)
+    /// 其他未知字段
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
 }
 
-/// 消息额外信息 (type 非255)
-///
-/// 文字频道消息的 extra 字段结构。
+/// 消息额外信息
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MessageExtra {
-    /// 消息类型 (同 MessageData.msg_type)
+    /// 消息类型
     #[serde(rename = "type")]
     pub msg_type: MessageType,
     /// 服务器ID
@@ -238,103 +206,245 @@ pub struct MessageExtra {
     /// 提及的角色ID数组
     #[serde(default)]
     pub mention_roles: Vec<String>,
-    /// 是否 @在线用户
+    /// 是否 mention 在线用户
     #[serde(default)]
     pub mention_here: bool,
-    /// 发送者信息
+    /// 作者信息
     pub author: Author,
     /// 其他未知字段
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
 }
 
-/// 作者/用户信息
-///
-/// 消息发送者的详细信息。
+/// 用户信息
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Author {
     /// 用户ID
     pub id: String,
     /// 用户名
-    #[serde(default)]
     pub username: String,
-    /// 服务器昵称
+    /// 昵称
     #[serde(default)]
     pub nickname: String,
-    /// 识别码 (用户名后的 #xxxx)
+    /// 识别码
     #[serde(default)]
     pub identify_num: String,
-    /// 头像URL
-    #[serde(default)]
-    pub avatar: String,
     /// 是否在线
     #[serde(default)]
     pub online: bool,
-    /// 是否为机器人
+    /// 是否机器人
     #[serde(default)]
     pub bot: bool,
-    /// 用户状态
+    /// 状态
     #[serde(default)]
     pub status: i32,
-    /// 其他未知字段
-    #[serde(flatten)]
-    pub other: serde_json::Map<String, serde_json::Value>,
+    /// 头像
+    #[serde(default)]
+    pub avatar: String,
+    /// 是否VIP
+    #[serde(default)]
+    pub is_vip: bool,
+    /// 是否音乐会员
+    #[serde(default)]
+    pub is_music_vip: bool,
 }
 
 /// 系统消息数据 (s=0, type=255)
-///
-/// 系统事件消息，如用户加入/离开服务器、消息置顶等。
-///
-/// ## extra.type 常见值
-///
-/// | type | 说明 |
-/// |------|------|
-/// | joined_channel | 用户加入语音频道 |
-/// | exited_channel | 用户离开语音频道 |
-/// | message_pinned | 消息被置顶 |
-/// | message_unpinned | 消息取消置顶 |
-/// | guild_member_online | 服务器成员上线 |
-/// | guild_member_offline | 服务器成员下线 |
-/// | added_reaction | 用户添加表情回应 |
-/// | deleted_reaction | 用户删除表情回应 |
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SystemMessageData {
     /// 消息通道类型
-    pub channel_type: ChannelType,
+    pub channel_type: String,
     /// 目标ID (系统消息时为 guild_id)
     pub target_id: String,
     /// 发送者ID (系统消息为 "1")
     pub author_id: String,
     /// 消息内容
+    #[serde(default)]
     pub content: String,
     /// 消息ID
+    #[serde(default)]
     pub msg_id: String,
     /// 消息时间戳(毫秒)
     pub msg_timestamp: i64,
     /// 系统事件额外信息
     pub extra: SystemMessageExtra,
-    /// 其他未知字段
-    #[serde(flatten)]
-    pub other: serde_json::Map<String, serde_json::Value>,
 }
 
 /// 系统消息额外信息 (type=255)
-///
-/// 系统事件的详细信息，不同事件类型的 body 结构不同。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SystemMessageExtra {
-    /// 事件类型标识 (如 "joined_channel", "exited_channel" 等)
+    /// 事件类型标识
     #[serde(rename = "type")]
     pub event_type: String,
     /// 服务器ID
     #[serde(default)]
     pub guild_id: String,
-    /// 事件关联的具体数据 (结构随 event_type 变化)
+    /// 事件关联的具体数据
     #[serde(default)]
     pub body: serde_json::Value,
-    /// 其他未知字段
-    #[serde(flatten)]
-    pub other: serde_json::Map<String, serde_json::Value>,
+}
+
+/// 按钮点击事件数据 (type=255, extra.type="message_btn_click")
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ButtonClickData {
+    /// 消息通道类型: GROUP/PERSON
+    pub channel_type: String,
+    /// 消息类型 (255 = 系统消息)
+    #[serde(rename = "type")]
+    pub msg_type: u8,
+    /// 目标ID (私聊时与user_id相同，频道消息时为频道ID)
+    pub target_id: String,
+    /// 发送者ID (系统消息为 "1")
+    pub author_id: String,
+    /// 消息内容
+    #[serde(default)]
+    pub content: String,
+    /// 消息ID (顶层的msg_id)
+    #[serde(default)]
+    pub msg_id: String,
+    /// 消息时间戳(毫秒)
+    pub msg_timestamp: i64,
+    /// 随机串
+    #[serde(default)]
+    pub nonce: String,
+    /// 按钮点击详情
+    pub extra: ButtonClickExtra,
+}
+
+/// 按钮点击事件额外信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ButtonClickExtra {
+    /// 事件类型 "message_btn_click"
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// 按钮点击详情
+    pub body: ButtonClickBody,
+}
+
+/// 按钮点击信息 (extra.body)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ButtonClickBody {
+    /// 点击用户ID
+    pub user_id: String,
+    /// 目标ID (频道ID)
+    pub target_id: String,
+    /// 消息ID (被点击的卡片消息ID)
+    pub msg_id: String,
+    /// 按钮的 value 值
+    pub value: String,
+    /// 用户信息 (可选)
+    #[serde(default)]
+    pub user_info: Option<ButtonClickUserInfo>,
+}
+
+/// 按钮点击用户信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ButtonClickUserInfo {
+    /// 用户ID
+    pub id: String,
+    /// 用户名
+    pub username: String,
+    /// 昵称
+    #[serde(default)]
+    pub nickname: String,
+    /// 识别码
+    #[serde(rename = "identifyNum", default)]
+    pub identify_num: String,
+    /// 是否在线
+    #[serde(default)]
+    pub online: bool,
+    /// 是否机器人
+    #[serde(default)]
+    pub bot: bool,
+    /// 头像
+    #[serde(default)]
+    pub avatar: String,
+}
+
+/// 语音频道事件数据 (joined_channel / exited_channel)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VoiceChannelEventData {
+    /// 消息通道类型
+    pub channel_type: String,
+    /// 消息类型 (255)
+    #[serde(rename = "type")]
+    pub msg_type: u8,
+    /// 目标ID (guild_id)
+    pub target_id: String,
+    /// 发送者ID ("1")
+    pub author_id: String,
+    /// 消息时间戳(毫秒)
+    pub msg_timestamp: i64,
+    /// 事件详情
+    pub extra: VoiceChannelEventExtra,
+}
+
+/// 语音频道事件额外信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VoiceChannelEventExtra {
+    /// 事件类型 "joined_channel" 或 "exited_channel"
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// 事件详情
+    pub body: VoiceChannelEventBody,
+}
+
+/// 语音频道事件信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VoiceChannelEventBody {
+    /// 用户ID
+    pub user_id: String,
+    /// 语音频道ID
+    pub channel_id: String,
+}
+
+/// 表情反应事件数据 (added_reaction / deleted_reaction)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReactionEventData {
+    /// 消息通道类型
+    pub channel_type: String,
+    /// 消息类型 (255)
+    #[serde(rename = "type")]
+    pub msg_type: u8,
+    /// 目标ID (channel_id)
+    pub target_id: String,
+    /// 发送者ID ("1")
+    pub author_id: String,
+    /// 消息时间戳(毫秒)
+    pub msg_timestamp: i64,
+    /// 事件详情
+    pub extra: ReactionEventExtra,
+}
+
+/// 表情反应事件额外信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReactionEventExtra {
+    /// 事件类型
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// 事件详情
+    pub body: ReactionEventBody,
+}
+
+/// 表情反应事件信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReactionEventBody {
+    /// 用户ID
+    pub user_id: String,
+    /// 消息ID
+    pub msg_id: String,
+    /// 表情信息
+    pub emoji: EmojiInfo,
+}
+
+/// 表情信息
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EmojiInfo {
+    /// 表情ID
+    pub id: String,
+    /// 表情名称
+    #[serde(default)]
+    pub name: String,
 }
 
 impl MessageData {
@@ -372,31 +482,84 @@ impl MessageData {
     pub fn is_private_message(&self) -> bool {
         self.channel_type == ChannelType::PERSON
     }
-
-    /// 判断是否提及了指定用户
-    pub fn mentions_user(&self, user_id: &str) -> bool {
-        self.extra.mention.contains(&user_id.to_string())
-    }
-
-    /// 判断是否 @所有人
-    pub fn mentions_all(&self) -> bool {
-        self.extra.mention_all
-    }
 }
 
 /// 解析事件
 ///
-/// 根据 type 字段将原始 JSON 数据解析为对应的事件类型。
+/// 根据 extra.type 字段将原始 JSON 数据解析为对应的事件类型。
 pub fn parse_event(data: serde_json::Value) -> Option<Event> {
     let msg_type = data.get("type")?.as_i64()?;
     
     match msg_type {
         255 => {
-            match serde_json::from_value::<SystemMessageData>(data.clone()) {
-                Ok(sys_data) => Some(Event::SystemMessage(sys_data)),
-                Err(e) => {
-                    tracing::warn!("解析 SystemMessageData 失败: {}", e);
-                    Some(Event::Unknown(data))
+            let event_type = data.get("extra")
+                .and_then(|e| e.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            
+            tracing::info!("[parse_event] 系统事件: extra.type={}", event_type);
+            
+            match event_type {
+                "message_btn_click" => {
+                    tracing::info!("[parse_event] 识别到按钮点击事件");
+                    tracing::debug!("[parse_event] 按钮事件原始数据: {}", serde_json::to_string(&data).unwrap_or_default());
+                    
+                    match serde_json::from_value::<ButtonClickData>(data.clone()) {
+                        Ok(btn_data) => {
+                            tracing::info!("[parse_event] 按钮事件解析成功: value={}", btn_data.extra.body.value);
+                            Some(Event::ButtonClick(btn_data))
+                        }
+                        Err(e) => {
+                            tracing::error!("[parse_event] 解析 ButtonClickData 失败: {}", e);
+                            tracing::error!("[parse_event] 数据: {}", serde_json::to_string(&data).unwrap_or_default());
+                            Some(Event::Unknown(data))
+                        }
+                    }
+                }
+                "joined_channel" => {
+                    match serde_json::from_value::<VoiceChannelEventData>(data.clone()) {
+                        Ok(voice_data) => Some(Event::UserJoinVoice(voice_data)),
+                        Err(e) => {
+                            tracing::warn!("解析 VoiceChannelEventData 失败: {}", e);
+                            Some(Event::Unknown(data))
+                        }
+                    }
+                }
+                "exited_channel" => {
+                    match serde_json::from_value::<VoiceChannelEventData>(data.clone()) {
+                        Ok(voice_data) => Some(Event::UserLeaveVoice(voice_data)),
+                        Err(e) => {
+                            tracing::warn!("解析 VoiceChannelEventData 失败: {}", e);
+                            Some(Event::Unknown(data))
+                        }
+                    }
+                }
+                "added_reaction" => {
+                    match serde_json::from_value::<ReactionEventData>(data.clone()) {
+                        Ok(reaction_data) => Some(Event::UserAddReaction(reaction_data)),
+                        Err(e) => {
+                            tracing::warn!("解析 ReactionEventData 失败: {}", e);
+                            Some(Event::Unknown(data))
+                        }
+                    }
+                }
+                "deleted_reaction" => {
+                    match serde_json::from_value::<ReactionEventData>(data.clone()) {
+                        Ok(reaction_data) => Some(Event::UserRemoveReaction(reaction_data)),
+                        Err(e) => {
+                            tracing::warn!("解析 ReactionEventData 失败: {}", e);
+                            Some(Event::Unknown(data))
+                        }
+                    }
+                }
+                _ => {
+                    match serde_json::from_value::<SystemMessageData>(data.clone()) {
+                        Ok(sys_data) => Some(Event::SystemMessage(sys_data)),
+                        Err(e) => {
+                            tracing::warn!("解析 SystemMessageData 失败: {}", e);
+                            Some(Event::Unknown(data))
+                        }
+                    }
                 }
             }
         }
@@ -405,12 +568,12 @@ pub fn parse_event(data: serde_json::Value) -> Option<Event> {
                 Ok(msg_data) => Some(Event::Message(msg_data)),
                 Err(e) => {
                     tracing::warn!("解析 MessageData 失败: {}", e);
-                    tracing::debug!("数据: {}", serde_json::to_string(&data).unwrap_or_default());
                     Some(Event::Unknown(data))
                 }
             }
         }
         _ => {
+            tracing::warn!("[parse_event] 未知消息类型: {}", msg_type);
             Some(Event::Unknown(data))
         }
     }

@@ -360,4 +360,52 @@ impl KookClient {
                 }
             })
     }
+
+    /// 发送卡片消息
+    pub async fn send_card_message(
+        &self,
+        channel_id: &str,
+        card_json: &serde_json::Value,
+    ) -> Result<String> {
+        let card_str = card_json.to_string();
+        info!("发送卡片消息到频道: {}", channel_id);
+        debug!("卡片内容: {}", card_str);
+        
+        let body = json!({
+            "target_id": channel_id,
+            "type": 10, // Card 消息类型
+            "content": card_str,
+        });
+
+        let response: serde_json::Value = self
+            .request(Method::POST, "/message/create", Some(body))
+            .await?;
+
+        let msg_id = response["msg_id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                BotError::KookApiError {
+                    code: -1,
+                    message: format!("无法获取消息 ID: {:?}", response),
+                }
+            })?;
+        
+        info!("卡片消息发送成功, msg_id: {}", msg_id);
+        Ok(msg_id)
+    }
+
+    /// 删除消息
+    pub async fn delete_message(&self, msg_id: &str) -> Result<()> {
+        let body = json!({
+            "msg_id": msg_id,
+        });
+        
+        let _: serde_json::Value = self
+            .request(Method::POST, "/message/delete", Some(body))
+            .await?;
+        
+        info!("已删除消息: {}", msg_id);
+        Ok(())
+    }
 }

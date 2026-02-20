@@ -1,3 +1,4 @@
+use crate::common::play_state;
 use crate::core::error::{BotError, Result};
 use crate::player::VoiceStreamingInfo;
 use std::io::{BufRead, BufReader};
@@ -141,6 +142,7 @@ impl FFmpegDirectStreamer {
 
         let pid = child.id();
         info!("FFmpeg 进程已启动 (PID: {:?})", pid);
+        play_state::set_playing(pid);
 
         let stderr = child.stderr.take().expect("stderr should be piped");
         let running = self.running.clone();
@@ -175,6 +177,7 @@ impl FFmpegDirectStreamer {
         if let Some(mut child) = self.process.take() {
             let _ = child.kill();
             let _ = child.wait();
+            play_state::set_stopped();
             info!("⏹️ 播放已停止");
         }
     }

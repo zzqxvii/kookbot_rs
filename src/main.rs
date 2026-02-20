@@ -22,7 +22,7 @@ use kook_music_bot::gateway::GatewayClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logging(Level::INFO);
+    init_logging(Level::DEBUG);
     
     info!("========================================");
     info!("Kook Bot (RKM) - Rust 实现 v0.1.0");

@@ -13,8 +13,12 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::api::KookClient;
+use crate::common::play_state;
 use crate::core::config::BotConfig;
-use crate::gateway::{EventHandler, MessageData, SystemMessageData};
+use crate::gateway::{
+    ButtonClickData, EventHandler, MessageData, ReactionEventData, SystemMessageData,
+    VoiceChannelEventData,
+};
 use crate::music::NeteaseClient;
 use crate::player::VoiceManager;
 use async_trait::async_trait;
@@ -174,8 +178,148 @@ impl EventHandler for BotEventHandler {
         info!("[Bot] 系统消息: {}", data.extra.event_type);
     }
     
+    async fn on_button_click(&self, data: ButtonClickData) {
+        info!("[Bot] ========== 按钮点击事件 ==========");
+        info!("[Bot] channel_type: {}", data.channel_type);
+        info!("[Bot] target_id (顶层): {}", data.target_id);
+        info!("[Bot] user_id: {}", data.extra.body.user_id);
+        info!("[Bot] button value: {}", data.extra.body.value);
+        info!("[Bot] msg_id: {}", data.extra.body.msg_id);
+        info!("[Bot] body.target_id (频道): {}", data.extra.body.target_id);
+        
+        let user_id = &data.extra.body.user_id;
+        let value = &data.extra.body.value;
+        // 使用 body.target_id 作为回复目标（群组频道）
+        let channel_id = &data.extra.body.target_id;
+        
+        // 获取用户显示名称
+        let user_display = if let Some(ref user_info) = data.extra.body.user_info {
+            if !user_info.nickname.is_empty() {
+                user_info.nickname.clone()
+            } else if !user_info.username.is_empty() {
+                user_info.username.clone()
+            } else {
+                user_id.clone()
+            }
+        } else {
+            user_id.clone()
+        };
+        
+        match value.as_str() {
+            "nextMusic" => {
+                info!("[Bot] 处理下一首请求, is_playing={}", play_state::is_playing());
+                info!("[Bot] 当前 PID: {}", play_state::get_pid());
+                
+                if play_state::is_playing() {
+                    play_state::request_next();
+                    let killed = play_state::kill_process();
+                    info!("[Bot] 进程已终止: {}", killed);
+                    
+                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
+                        let _ = client.send_channel_message(
+                            channel_id,
+                            &format!("⏭️ 用户 **{}** 点击了下一首", user_display)
+                        ).await;
+                    }
+                } else {
+                    info!("[Bot] 当前没有正在播放的歌曲");
+                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
+                        let _ = client.send_channel_message(
+                            channel_id,
+                            "⚠️ 当前没有正在播放的歌曲"
+                        ).await;
+                    }
+                }
+            }
+            "stop" => {
+                info!("[Bot] 处理停止请求, is_playing={}", play_state::is_playing());
+                info!("[Bot] 当前 PID: {}", play_state::get_pid());
+                
+                if play_state::is_playing() {
+                    play_state::request_stop();
+                    let killed = play_state::kill_process();
+                    info!("[Bot] 进程已终止: {}", killed);
+                    
+                    // 获取播放统计
+                    let play_count = play_state::get_play_count();
+                    let duration = play_state::get_play_duration();
+                    let duration_min = duration / 60;
+                    let duration_sec = duration % 60;
+                    
+                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
+                        // 删除播放卡片
+                        if let Some(old_msg_id) = play_state::take_play_msg_id() {
+                            let _ = client.delete_message(&old_msg_id).await;
+                        }
+                        
+                        // 发送听歌报告
+                        let report = format!(
+                            "📊 **本次听歌报告**\n\
+                            ────────────────\n\
+                            🎵 播放歌曲: {} 首\n\
+                            ⏱️ 听歌时长: {}分{}秒\n\
+                            ────────────────\n\
+                            ⏹️ 用户 **{}** 停止了播放",
+                            play_count,
+                            duration_min,
+                            duration_sec,
+                            user_display
+                        );
+                        let _ = client.send_channel_message(channel_id, &report).await;
+                    }
+                } else {
+                    info!("[Bot] 当前没有正在播放的歌曲");
+                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
+                        let _ = client.send_channel_message(
+                            channel_id,
+                            "⚠️ 当前没有正在播放的歌曲"
+                        ).await;
+                    }
+                }
+            }
+            _ => {
+                debug!("未处理的按钮值: {}", value);
+            }
+        }
+        info!("[Bot] ========== 按钮事件处理完成 ==========");
+    }
+    
+    async fn on_user_join_voice(&self, data: VoiceChannelEventData) {
+        info!(
+            "[Bot] 用户 {} 加入语音频道 {}",
+            data.extra.body.user_id, data.extra.body.channel_id
+        );
+    }
+    
+    async fn on_user_leave_voice(&self, data: VoiceChannelEventData) {
+        info!(
+            "[Bot] 用户 {} 离开语音频道 {}",
+            data.extra.body.user_id, data.extra.body.channel_id
+        );
+    }
+    
+    async fn on_user_add_reaction(&self, data: ReactionEventData) {
+        info!(
+            "[Bot] 用户 {} 对消息 {} 添加表情 {}",
+            data.extra.body.user_id, data.extra.body.msg_id, data.extra.body.emoji.id
+        );
+    }
+    
+    async fn on_user_remove_reaction(&self, data: ReactionEventData) {
+        info!(
+            "[Bot] 用户 {} 对消息 {} 删除表情 {}",
+            data.extra.body.user_id, data.extra.body.msg_id, data.extra.body.emoji.id
+        );
+    }
+    
     async fn on_unknown(&self, data: Value) {
-        warn!("[Bot] 未知事件类型: {:?}", data.get("type"));
+        let msg_type = data.get("type").and_then(|t| t.as_i64()).unwrap_or(-1);
+        let event_type = data.get("extra")
+            .and_then(|e| e.get("type"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown");
+        warn!("[Bot] 未知事件: type={}, event_type={}", msg_type, event_type);
+        warn!("[Bot] 原始数据: {}", serde_json::to_string(&data).unwrap_or_default());
     }
 }
 

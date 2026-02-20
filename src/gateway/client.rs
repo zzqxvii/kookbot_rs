@@ -13,7 +13,7 @@ use tokio_tungstenite::{
     tungstenite::protocol::Message,
     MaybeTlsStream, WebSocketStream,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Gateway 客户端
 pub struct GatewayClient {
@@ -117,8 +117,10 @@ impl GatewayClient {
         }
 
         let mut heartbeat_tick = interval(Duration::from_secs(30));
-        let mut need_heartbeat = true;
+        heartbeat_tick.tick().await; // 跳过第一次立即 tick
         let mut message_count = 0u32;
+
+        info!("[Gateway] 开始接收事件，心跳间隔 30 秒");
 
         loop {
             if !*self.running.read().await {
@@ -128,9 +130,7 @@ impl GatewayClient {
 
             tokio::select! {
                 _ = heartbeat_tick.tick() => {
-                    if need_heartbeat {
-                        self.send_heartbeat().await;
-                    }
+                    self.send_heartbeat().await;
                 }
 
                 message_result = self.receive_message() => {
@@ -172,48 +172,50 @@ impl GatewayClient {
     async fn handle_message(&self, msg: Message) {
         match msg {
             Message::Text(text) => {
+                trace!("[Gateway] 收到文本消息: {}", text);
                 match serde_json::from_str::<GatewayMessage>(&text) {
                     Ok(gateway_msg) => {
                         self.handle_gateway_message(gateway_msg).await;
                     }
                     Err(e) => {
-                        warn!("消息解析失败: {}", e);
+                        warn!("[Gateway] 消息解析失败: {}", e);
                     }
                 }
             }
             Message::Binary(data) => {
-                // 尝试解压缩二进制消息
+                info!("[Gateway] 收到二进制消息, 长度: {} bytes", data.len());
                 match try_decompress(&data) {
                     Ok(text) => {
+                        debug!("[Gateway] 解压后消息: {}", text);
                         if let Ok(gateway_msg) = serde_json::from_str::<GatewayMessage>(&text) {
                             self.handle_gateway_message(gateway_msg).await;
                         }
                     }
-                    Err(_) => {
-                        // 解压失败，静默忽略
+                    Err(e) => {
+                        warn!("[Gateway] 解压失败: {}", e);
                     }
                 }
             }
             Message::Close(frame) => {
-                warn!("收到关闭帧: {:?}", frame);
+                warn!("[Gateway] 收到关闭帧: {:?}", frame);
                 *self.running.write().await = false;
             }
             Message::Ping(data) => {
-                info!("收到 WebSocket Ping，长度: {}", data.len());
+                info!("[Gateway] 收到 WebSocket Ping, 长度: {}", data.len());
                 let mut stream = self.ws_stream.write().await;
                 if let Some(ref mut s) = *stream {
                     if let Err(e) = s.send(Message::Pong(data)).await {
-                        error!("发送 Pong 失败: {}", e);
+                        error!("[Gateway] 发送 Pong 失败: {}", e);
                     } else {
-                        info!("已回复 Pong");
+                        info!("[Gateway] 已回复 Pong");
                     }
                 }
             }
             Message::Pong(_) => {
-                debug!("收到 WebSocket Pong");
+                debug!("[Gateway] 收到 WebSocket Pong");
             }
             Message::Frame(_) => {
-                debug!("收到 Frame 消息");
+                debug!("[Gateway] 收到 Frame 消息");
             }
         }
     }
@@ -228,28 +230,43 @@ impl GatewayClient {
                 }
                 
                 if let Some(data) = &msg.d {
+                    let msg_type = data.get("type").and_then(|t| t.as_i64()).unwrap_or(-1);
+                    let event_type = data.get("extra")
+                        .and_then(|e| e.get("type"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("unknown");
+                    
+                    info!("[Gateway] 收到事件: type={}, extra.type={}", msg_type, event_type);
+                    
+                    if msg_type == 255 {
+                        debug!("[Gateway] 系统事件原始数据: {}", serde_json::to_string(data).unwrap_or_default());
+                    }
+                    
                     if let Some(event) = parse_event(data.clone()) {
                         self.dispatch_event(event).await;
+                    } else {
+                        warn!("[Gateway] 事件解析返回 None");
                     }
                 }
             }
             SignalType::Hello => {
-                info!("🔗 连接到 Kook Gateway");
+                info!("🔗 收到 HELLO，连接到 Kook Gateway 成功");
                 
                 if let Some(interval) = msg.heartbeat_interval() {
+                    info!("[Gateway] 心跳间隔: {}ms", interval);
                     *self.heartbeat_interval.write().await = interval;
                 }
                 if let Some(session_id) = msg.session_id() {
+                    info!("[Gateway] Session ID: {}", session_id);
                     self.session_info.write().await.session_id = Some(session_id.to_string());
                 }
-                
-                self.send_identify().await;
             }
             SignalType::Ping => {
+                info!("[Gateway] 收到 PING，发送 PONG");
                 self.send_pong().await;
             }
             SignalType::Pong => {
-                // 心跳回复，静默处理
+                info!("[Gateway] 收到 PONG，心跳正常");
             }
             SignalType::Reconnect => {
                 warn!("⚠️ 服务器要求重连");
@@ -265,31 +282,21 @@ impl GatewayClient {
     }
 
     async fn send_identify(&self) {
-        let identify = serde_json::json!({
-            "s": 2,
-            "d": {
-                "token": self.token,
-                "intents": self.intents,
-                "compress": false
-            }
-        });
-
-        let mut stream = self.ws_stream.write().await;
-        if let Some(ref mut s) = *stream {
-            if let Err(e) = s.send(Message::Text(identify.to_string().into())).await {
-                error!("Identify 发送失败: {}", e);
-                *self.running.write().await = false;
-            }
-        }
+        // Kook WebSocket 不需要单独的 identify 包
+        // token 在获取 gateway URL 时已经验证
+        // 连接成功后等待 HELLO (s=1) 即可
+        info!("[Gateway] 连接成功，等待 HELLO 消息...");
     }
 
     async fn send_heartbeat(&self) {
         let sn = self.session_info.read().await.last_sn;
+        // 心跳包格式: s=2 是 PING
         let heartbeat = serde_json::json!({
-            "s": 1,
+            "s": 2,
             "sn": sn
         });
 
+        debug!("[Gateway] 发送心跳 PING, sn={}", sn);
         let mut stream = self.ws_stream.write().await;
         if let Some(ref mut s) = *stream {
             if let Err(e) = s.send(Message::Text(heartbeat.to_string().into())).await {
@@ -309,8 +316,22 @@ impl GatewayClient {
     }
 
     async fn dispatch_event(&self, event: Event) {
+        let event_type = match &event {
+            Event::Message(_) => "Message",
+            Event::SystemMessage(_) => "SystemMessage",
+            Event::ButtonClick(_) => "ButtonClick",
+            Event::UserJoinVoice(_) => "UserJoinVoice",
+            Event::UserLeaveVoice(_) => "UserLeaveVoice",
+            Event::UserAddReaction(_) => "UserAddReaction",
+            Event::UserRemoveReaction(_) => "UserRemoveReaction",
+            Event::Unknown(_) => "Unknown",
+        };
+        info!("[Gateway] 分发事件: {}", event_type);
+        
         if let Some(handler) = self.event_handler.read().await.as_ref() {
             handler.on_event(event).await;
+        } else {
+            warn!("[Gateway] 没有事件处理器!");
         }
     }
 

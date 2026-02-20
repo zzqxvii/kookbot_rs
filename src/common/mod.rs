@@ -5,6 +5,8 @@
 //! - models: 数据模型
 //! - utils: 工具函数
 
+pub mod card;
 pub mod logging;
 pub mod models;
+pub mod play_state;
 pub mod utils;

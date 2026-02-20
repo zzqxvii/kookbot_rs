@@ -11,6 +11,21 @@ pub use queue::{QueueItem, QueueItemStatus, QueueManager, QueueConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Sender {
+    pub nick_name: String,
+    pub avatar_url: Option<String>,
+}
+
+impl Default for Sender {
+    fn default() -> Self {
+        Self {
+            nick_name: "未知用户".to_string(),
+            avatar_url: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Music {
     pub title: String,
     pub author: String,
@@ -18,6 +33,7 @@ pub struct Music {
     pub platform: String,
     pub source_url: Option<String>,
     pub duration: Option<u64>,
+    pub sender: Sender,
 }
 
 impl Default for Music {
@@ -29,6 +45,7 @@ impl Default for Music {
             platform: "虚空".to_string(),
             source_url: None,
             duration: None,
+            sender: Sender::default(),
         }
     }
 }
