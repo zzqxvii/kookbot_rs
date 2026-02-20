@@ -204,11 +204,3 @@ impl AudioDecoder {
         samples
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // 这些测试需要实际的音频文件
-    // 在 CI 环境中可以跳过或使用 mock
-}

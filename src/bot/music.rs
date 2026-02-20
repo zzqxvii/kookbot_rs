@@ -307,30 +307,40 @@ impl WyyCommand {
         let channel_id = channel_id.clone();
         let vc_id = vc.id.clone();
         let playlist_name = playlist.name.clone();
-        let track_ids: Vec<u64> = playlist.track_ids.iter().take(10).cloned().collect(); // 只播放前10首
-        let track_count = track_ids.len();
+        let total_count = playlist.track_ids.len();
+        let track_ids: Vec<u64> = playlist.track_ids.clone();
         
         // 重置播放统计
         crate::common::play_state::reset_stats();
         
-        // 预先获取所有歌曲的基本信息（用于队列显示）
-        info!("预先获取歌单中所有歌曲信息...");
-        let mut all_songs_info: Vec<(String, String)> = Vec::new();
-        for tid in &track_ids {
-            if let Ok(song) = netease.get_song_detail(*tid).await {
+        // 只获取前3首歌曲信息（用于第一张卡片显示）
+        info!("获取前3首歌曲信息用于初始卡片...");
+        let initial_songs: Vec<_> = match netease.get_songs_detail(&track_ids.iter().take(3).cloned().collect::<Vec<_>>()).await {
+            Ok(songs) => songs,
+            Err(_) => Vec::new(),
+        };
+        
+        // 构建初始队列信息
+        let initial_queue: Vec<(String, String, String)> = initial_songs.iter().skip(1)
+            .map(|song| {
                 let author = song.artists.iter()
                     .map(|a| a.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                all_songs_info.push((song.name.clone(), author));
-            }
-        }
-        info!("获取完成，共 {} 首歌曲信息", all_songs_info.len());
+                let pic_url = song.album.pic_url.clone();
+                (song.name.clone(), author, pic_url)
+            })
+            .collect();
+        
+        info!("获取完成，初始队列 {} 首（歌单共 {} 首）", initial_queue.len(), total_count);
         
         drop(netease);
         
+        let initial_queue = Arc::new(tokio::sync::RwLock::new(initial_queue));
+        let current_song_info = Arc::new(tokio::sync::RwLock::new(None::<(String, String, String)>));
+        
         tokio::spawn(async move {
-            info!("开始播放歌单: {}，共 {} 首", playlist_name, track_ids.len());
+            info!("开始播放歌单: {}，共 {} 首", playlist_name, total_count);
             
             for (index, track_id) in track_ids.iter().enumerate() {
                 // 检查停止请求
@@ -341,7 +351,7 @@ impl WyyCommand {
                 
                 let netease = netease_client.read().await;
                 
-                // 获取歌曲详情
+                // 获取当前歌曲信息
                 let song = match netease.get_song_detail(*track_id).await {
                     Ok(s) => s,
                     Err(e) => {
@@ -350,15 +360,44 @@ impl WyyCommand {
                     }
                 };
                 
+                info!("当前播放: {}, 队列状态: {:?}", song.name, initial_queue.read().await);
+                
                 let music = netease.to_music(&song);
+                info!("准备播放第 {} 首: {}", index + 1, song.name);
                 
-                // 使用预先获取的歌曲信息构建队列
-                let queue_songs: Vec<(String, String)> = all_songs_info.iter()
-                    .skip(index + 1)
-                    .cloned()
-                    .collect();
+                // 获取下两首歌曲信息（用于更新队列）
+                let mut next_songs_info: Vec<(String, String, String)> = Vec::new(); // (歌名, 歌手, 封面)
+                for i in 1..=2 {
+                    if index + i < track_ids.len() {
+                        match netease.get_song_detail(track_ids[index + i]).await {
+                            Ok(next_song) => {
+                                let author = next_song.artists.iter()
+                                    .map(|a| a.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                let pic_url = next_song.album.pic_url.clone();
+                                next_songs_info.push((next_song.name.clone(), author, pic_url));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 
-                // 获取歌曲 URL
+                // 更新队列：移除已播放的，添加新获取的
+                {
+                    let mut queue = initial_queue.write().await;
+                    if !queue.is_empty() {
+                        queue.remove(0);
+                    }
+                    for info in next_songs_info {
+                        queue.push(info);
+                    }
+                }
+                
+                // 构建当前队列显示
+                let queue_songs: Vec<(String, String, String)> = initial_queue.read().await.clone();
+                
+                // 获取歌曲 URL（这个必须实时获取，因为会过期）
                 let audio_url = match netease.get_song_url(*track_id).await {
                     Ok(Some(url)) => url,
                     _ => {
@@ -412,6 +451,7 @@ impl WyyCommand {
                 };
                 
                 // 发送播放卡片
+                info!("准备发送播放卡片, channel_id: {}", channel_id);
                 if let Some(client) = api_client.read().await.as_ref() {
                     // 删除旧卡片
                     if let Some(old_msg_id) = crate::common::play_state::take_play_msg_id() {
@@ -422,12 +462,13 @@ impl WyyCommand {
                     
                     // 构建队列歌曲
                     let queue: Vec<QueueMusic> = queue_songs.iter()
-                        .map(|(title, author)| QueueMusic {
+                        .map(|(title, author, pic_url)| QueueMusic {
                             title: title.clone(),
                             author: author.clone(),
                             platform: "网易云".to_string(),
+                            pic_url: pic_url.clone(),
                             sender: CardSender {
-                                nick_name: "歌单播放".to_string(),
+                                nick_name: "".to_string(),
                                 avatar_url: None,
                             },
                         })
@@ -445,8 +486,16 @@ impl WyyCommand {
                     }).with_queue(queue, track_ids.len() - index);
                     
                     let card_json = build_play_card(&card_data);
-                    if let Ok(msg_id) = client.send_card_message(&channel_id, &card_json).await {
-                        crate::common::play_state::set_play_msg_id(msg_id);
+                    info!("卡片 JSON: {}", card_json);
+                    
+                    match client.send_card_message(&channel_id, &card_json).await {
+                        Ok(msg_id) => {
+                            info!("卡片发送成功, msg_id: {}", msg_id);
+                            crate::common::play_state::set_play_msg_id(msg_id);
+                        }
+                        Err(e) => {
+                            error!("卡片发送失败: {}", e);
+                        }
                     }
                 }
                 
@@ -481,6 +530,12 @@ impl WyyCommand {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
             
+            // 检查是否是因停止请求而退出
+            let stopped_by_user = crate::common::play_state::is_stop_requested();
+            
+            // 重置播放状态
+            crate::common::play_state::reset_stats();
+            
             // 发送听歌报告
             let play_count = crate::common::play_state::get_play_count();
             let duration = crate::common::play_state::get_play_duration();
@@ -494,26 +549,42 @@ impl WyyCommand {
                 }
                 
                 // 发送听歌报告
-                let report = format!(
-                    "📊 **本次听歌报告**\n\
-                    ────────────────\n\
-                    🎵 播放歌曲: {} 首\n\
-                    ⏱️ 听歌时长: {}分{}秒\n\
-                    📀 歌单: {}\n\
-                    ────────────────\n\
-                    感谢收听！",
-                    play_count,
-                    duration_min,
-                    duration_sec,
-                    playlist_name
-                );
+                let report = if stopped_by_user {
+                    format!(
+                        "📊 **本次听歌报告**\n\
+                        ────────────────\n\
+                        🎵 播放歌曲: {} 首\n\
+                        ⏱️ 听歌时长: {}分{}秒\n\
+                        📀 歌单: {}\n\
+                        ────────────────\n\
+                        ⏹️ 播放已停止",
+                        play_count,
+                        duration_min,
+                        duration_sec,
+                        playlist_name
+                    )
+                } else {
+                    format!(
+                        "📊 **本次听歌报告**\n\
+                        ────────────────\n\
+                        🎵 播放歌曲: {} 首\n\
+                        ⏱️ 听歌时长: {}分{}秒\n\
+                        📀 歌单: {}\n\
+                        ────────────────\n\
+                        感谢收听！",
+                        play_count,
+                        duration_min,
+                        duration_sec,
+                        playlist_name
+                    )
+                };
                 let _ = client.send_channel_message(&channel_id, &report).await;
             }
             
             info!("歌单播放完成");
         });
         
-        CommandResult::Reply(format!("✅ 歌单开始播放，共 {} 首", track_count))
+        CommandResult::Reply(format!("✅ 歌单开始播放，共 {} 首", total_count))
     }
     
     /// 处理单曲播放

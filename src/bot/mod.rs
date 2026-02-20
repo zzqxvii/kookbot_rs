@@ -240,19 +240,30 @@ impl EventHandler for BotEventHandler {
                     let killed = play_state::kill_process();
                     info!("[Bot] 进程已终止: {}", killed);
                     
+                    // 删除播放卡片
+                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
+                        if let Some(old_msg_id) = play_state::take_play_msg_id() {
+                            let _ = client.delete_message(&old_msg_id).await;
+                        }
+                    }
+                    
+                    // 离开语音频道
+                    let mut vm = self.bot.voice_manager.lock().await;
+                    if let Some(ref mut voice_manager) = *vm {
+                        let _ = voice_manager.leave_channel().await;
+                        *vm = None;
+                    }
+                    
                     // 获取播放统计
                     let play_count = play_state::get_play_count();
                     let duration = play_state::get_play_duration();
                     let duration_min = duration / 60;
                     let duration_sec = duration % 60;
                     
+                    // 重置播放状态
+                    play_state::reset_stats();
+                    
                     if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        // 删除播放卡片
-                        if let Some(old_msg_id) = play_state::take_play_msg_id() {
-                            let _ = client.delete_message(&old_msg_id).await;
-                        }
-                        
-                        // 发送听歌报告
                         let report = format!(
                             "📊 **本次听歌报告**\n\
                             ────────────────\n\

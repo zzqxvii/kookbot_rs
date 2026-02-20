@@ -47,6 +47,7 @@ pub struct QueueMusic {
     pub title: String,
     pub author: String,
     pub platform: String,
+    pub pic_url: String,
     pub sender: Sender,
 }
 
@@ -89,23 +90,28 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
     };
 
     let mut modules = vec![
+        // 当前播放标题
         json!({
             "type": "section",
             "text": {
                 "type": "kmarkdown",
-                "content": "**当前正在播放：**\n---"
+                "content": "**当前播放:**"
             }
         }),
+        // 分割线
+        json!({
+            "type": "divider"
+        }),
+        // 当前播放 - 图片在右侧，信息竖着显示
         json!({
             "type": "section",
             "text": {
                 "type": "kmarkdown",
                 "content": format!(
-                    "  **歌名:  {}**\n  **歌手:  {}**\n  **音源:  {}**\n  **用户:  (font){}(font)[pink]**",
-                    truncate_text(&data.current.title, 30),
-                    truncate_text(&data.current.author, 20),
-                    platform_display,
-                    data.current.sender.nick_name
+                    " **歌名:** {}\n **歌手:** {}\n **音源:** `{}`",
+                    truncate_text(&data.current.title, 25),
+                    truncate_text(&data.current.author, 15),
+                    platform_display
                 )
             },
             "mode": "right",
@@ -115,16 +121,24 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
                 "size": "sm"
             }
         }),
+        // 分割线
         json!({
-            "type": "section",
-            "text": {
-                "type": "kmarkdown",
-                "content": "---"
-            }
+            "type": "divider"
         }),
+        // 按钮（使用空文本占位实现靠右）
         json!({
             "type": "action-group",
             "elements": [
+                {
+                    "type": "button",
+                    "theme": "secondary",
+                    "value": "",
+                    "text": {
+                        "type": "plain-text",
+                        "content": "                      "
+                    },
+                    "disabled": true
+                },
                 {
                     "type": "button",
                     "theme": "primary",
@@ -132,7 +146,7 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
                     "click": "return-val",
                     "text": {
                         "type": "plain-text",
-                        "content": "下一首歌"
+                        "content": "下一首"
                     }
                 },
                 {
@@ -142,81 +156,61 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
                     "click": "return-val",
                     "text": {
                         "type": "plain-text",
-                        "content": "停止所有"
+                        "content": "停止"
                     }
                 }
             ]
         }),
     ];
 
+    // 播放队列 - 带封面
     if !data.queue.is_empty() {
+        // 先加分割线
         modules.push(json!({
-            "type": "section",
-            "text": {
-                "type": "kmarkdown",
-                "content": "**播放队列：**\n---"
-            }
+            "type": "divider"
         }));
 
         for (idx, music) in data.queue.iter().enumerate().take(2) {
-            let queue_platform_lower = music.platform.to_lowercase();
-            let queue_platform_display = match queue_platform_lower.as_str() {
-                "bilibili" => "B站",
-                "netease" => "网易云",
-                "qqmusic" => "QQ音乐",
-                other => other,
+            let pic_url = if music.pic_url.is_empty() {
+                DEFAULT_COVER.to_string()
+            } else {
+                music.pic_url.clone()
             };
-            let queue_platform_icon = get_platform_icon(&music.platform);
 
             modules.push(json!({
                 "type": "section",
                 "text": {
                     "type": "kmarkdown",
-                    "content": format!("  **{}. {} - {}**", idx + 1, truncate_text(&music.title, 30), truncate_text(&music.author, 20))
+                    "content": format!(
+                        "{} - {}",
+                        truncate_text(&music.title, 25),
+                        truncate_text(&music.author, 15)
+                    )
                 },
-                "mode": "left"
+                "mode": "left",
+                "accessory": {
+                    "type": "image",
+                    "src": pic_url,
+                    "size": "sm"
+                }
             }));
 
-            let avatar_url = music.sender.avatar_url.as_deref().unwrap_or(DEFAULT_COVER);
+            // 每首歌后加分割线
             modules.push(json!({
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "plain-text",
-                        "content": format!("\n源: {}", queue_platform_display)
-                    },
-                    {
-                        "type": "image",
-                        "src": queue_platform_icon
-                    },
-                    {
-                        "type": "plain-text",
-                        "content": format!("  |  用户: {}", music.sender.nick_name)
-                    },
-                    {
-                        "type": "image",
-                        "src": avatar_url
-                    }
-                ]
+                "type": "divider"
             }));
+        }
 
+        if data.queue_total > 2 {
             modules.push(json!({
                 "type": "section",
                 "text": {
                     "type": "kmarkdown",
-                    "content": "---"
+                    "content": format!("还有 {} 首...", data.queue_total - 2)
                 }
             }));
         }
     }
-
-    modules.push(json!({
-        "type": "section",
-        "text": {
-            "type": "kmarkdown",
-            "content": format!("**共有{}首歌曲**", data.queue_total)
-        }
-    }));
 
     json!([{
         "type": "card",

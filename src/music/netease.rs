@@ -3,7 +3,7 @@ use crate::player::{Music, Sender};
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use regex::Regex;
 
 /// 网易云音乐 API 客户端
@@ -429,6 +429,50 @@ impl NeteaseClient {
             })
     }
 
+    /// 批量获取歌曲详情（分批获取，每批最多100首）
+    /// 网易云API支持传入逗号分隔的多个ID，但有数量限制
+    pub async fn get_songs_detail(&self, song_ids: &[u64]) -> Result<Vec<NeteaseSong>> {
+        if song_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut all_songs = Vec::new();
+        let chunk_size = 100; // 每批最多100首
+        
+        for chunk in song_ids.chunks(chunk_size) {
+            let url = format!("{}/song/detail", self.base_url);
+            let ids_str = chunk.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            
+            debug!("批量获取歌曲，ID数量: {}", chunk.len());
+            
+            let request = self.http
+                .get(&url)
+                .query(&[("ids", &ids_str)]);
+            
+            let response = self.add_cookie(request).send().await?;
+            let json: serde_json::Value = response.json().await?;
+            
+            let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if code != 200 {
+                warn!("批量获取歌曲详情失败，code: {}, 响应: {:?}", code, json);
+                continue;
+            }
+
+            let songs: Vec<NeteaseSong> = json
+                .get("songs")
+                .and_then(|s| serde_json::from_value(s.clone()).ok())
+                .unwrap_or_default();
+            
+            all_songs.extend(songs);
+        }
+
+        info!("批量获取 {} 首歌曲详情，返回 {} 首", song_ids.len(), all_songs.len());
+        Ok(all_songs)
+    }
+
     /// 添加 cookie 到请求头
     fn add_cookie(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref cookie) = self.cookie {
@@ -581,14 +625,21 @@ impl NeteaseClient {
             .collect::<Vec<_>>()
             .join(", ");
 
+        let pic_url = if song.album.pic_url.is_empty() {
+            "https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg?param=130y130".to_string()
+        } else {
+            // 网易云图片添加缩略图参数
+            let mut url = song.album.pic_url.clone();
+            if !url.contains('?') {
+                url.push_str("?param=130y130");
+            }
+            url
+        };
+
         Music {
             title: song.name.clone(),
             author,
-            pic_url: if song.album.pic_url.is_empty() {
-                "https://p1.music.126.net/6y-UleORITEDbvrOLV0Q8A==/5639395138885805.jpg".to_string()
-            } else {
-                song.album.pic_url.clone()
-            },
+            pic_url,
             platform: "网易云".to_string(),
             source_url: Some(format!("https://music.163.com/#/song?id={}", song.id)),
             duration: Some(song.duration / 1000),

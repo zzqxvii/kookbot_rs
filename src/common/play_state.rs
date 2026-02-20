@@ -45,6 +45,8 @@ pub fn set_stopped() {
 /// 重置所有播放统计（在开始新歌单时调用）
 pub fn reset_stats() {
     PLAY_COUNT.store(0, Ordering::SeqCst);
+    STOP_REQUESTED.store(false, Ordering::SeqCst);
+    NEXT_REQUESTED.store(false, Ordering::SeqCst);
     if let Ok(mut guard) = START_TIME.write() {
         *guard = None;
     }
