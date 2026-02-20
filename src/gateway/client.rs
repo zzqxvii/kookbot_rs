@@ -281,13 +281,6 @@ impl GatewayClient {
         }
     }
 
-    async fn send_identify(&self) {
-        // Kook WebSocket 不需要单独的 identify 包
-        // token 在获取 gateway URL 时已经验证
-        // 连接成功后等待 HELLO (s=1) 即可
-        info!("[Gateway] 连接成功，等待 HELLO 消息...");
-    }
-
     async fn send_heartbeat(&self) {
         let sn = self.session_info.read().await.last_sn;
         // 心跳包格式: s=2 是 PING

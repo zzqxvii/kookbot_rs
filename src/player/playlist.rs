@@ -47,7 +47,7 @@ impl Playlist {
             play_order: Vec::new(),
             current_position: None,
             mode: PlayMode::default(),
-            rng: rand::thread_rng(),
+            rng: rand::rng(),
         }
     }
 

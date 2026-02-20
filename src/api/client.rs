@@ -8,11 +8,6 @@ use tracing::{debug, error, info};
 
 const KOOK_API_BASE: &str = "https://www.kookapp.cn/api/v3";
 
-#[derive(Debug, serde::Deserialize)]
-struct GatewayResponse {
-    url: String,
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Guild {
     pub id: String,

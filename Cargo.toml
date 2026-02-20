@@ -4,19 +4,14 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Your Name <your.email@example.com>"]
 description = "Kook Bot (RKM) - 用 Rust 编写的 Kook 机器人框架，支持模块化扩展"
-rust-version = "1.75"
+rust-version = "1.93"
 
 [dependencies]
 # 异步运行时
 tokio = { version = "1.35", features = ["full"] }
-tokio-util = { version = "0.7", features = ["codec"] }
 
 # 音频解码 - 支持 MP3, FLAC, WAV 等
-symphonia = { version = "0.5.4", features = ["mp3", "flac", "wav", "isomp4", "aac"] }
-symphonia-core = "0.5.4"
-
-# Opus 编码 - 暂时注释，Windows 需要手动安装 opus 库
-# opus = "0.3"
+symphonia = { version = "0.5.4", features = ["mp3"] }
 
 # HTTP 客户端 - 用于 Kook API
 reqwest = { version = "0.13", features = ["json", "multipart", "stream", "rustls", "query"] }
@@ -29,8 +24,7 @@ futures-util = "0.3"
 flate2 = "1.0"
 
 # Webhook HTTP 服务器
-axum = { version = "0.7", features = ["tokio", "macros"] }
-tower = "0.4"
+axum = { version = "0.8", features = ["tokio", "macros"] }
 
 # Webhook 签名验证
 hmac = "0.12"
@@ -41,7 +35,6 @@ base64 = "0.22"
 # JSON 处理
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_repr = "0.1"
 
 # 日志
 tracing = "0.1"
@@ -49,32 +42,21 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 owo-colors = "4.0"
 
 # 错误处理
-anyhow = "1.0"
-thiserror = "1.0"
+anyhow = "1"
+thiserror = "2"
 
 # 异步 trait
 async-trait = "0.1"
 
 # 配置管理
-toml = "0.8"
-dirs = "5.0"
+toml = "0.9.8"
+dirs = "6.0"
 
 # 时间和日期
 chrono = { version = "0.4", features = ["serde"] }
 
-# 字节处理
-bytes = "1.5"
-byteorder = "1.5"
-
-# 并发
-parking_lot = "0.12"
-crossbeam = "0.8"
-
-# 用于 resample（如果需要）
-# rubato = "0.14"
-
 # 随机播放
-rand = "0.8"
+rand = "0.10"
 
 # 正则表达式
 regex = "1.10"
@@ -82,11 +64,6 @@ regex = "1.10"
 # 二维码生成
 qrcode = "0.14"
 image = "0.25"
-
-[dev-dependencies]
-tokio-test = "0.4"
-mockall = "0.12"
-wiremock = "0.6"
 
 [[bin]]
 name = "kook-music-bot"

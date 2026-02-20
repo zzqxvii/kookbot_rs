@@ -14,13 +14,6 @@ pub struct NeteaseClient {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct NeteaseResponse<T> {
-    code: i32,
-    #[serde(default)]
-    data: Option<T>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct NeteaseSong {
     pub id: u64,
     pub name: String,
@@ -44,20 +37,6 @@ pub struct NeteaseAlbum {
     pub name: String,
     #[serde(alias = "picUrl", default)]
     pub pic_url: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SearchResult {
-    #[serde(alias = "songs", default)]
-    songs: Vec<NeteaseSong>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SongUrlData {
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(alias = "br", default)]
-    bitrate: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

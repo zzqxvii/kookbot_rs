@@ -50,7 +50,7 @@ impl AudioDecoder {
             .format(&hint, mss, &format_opts, &metadata_opts)
             .map_err(|e| BotError::AudioDecodeError(format!("无法识别音频格式: {:?}", e)))?;
 
-        let mut format = probed.format;
+        let format = probed.format;
 
         // 找到第一个音频轨道
         let track = format
