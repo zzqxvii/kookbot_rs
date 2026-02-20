@@ -95,12 +95,8 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
             "type": "section",
             "text": {
                 "type": "kmarkdown",
-                "content": "**当前播放:**"
+                "content": "**当前正在播放：**\n---"
             }
-        }),
-        // 分割线
-        json!({
-            "type": "divider"
         }),
         // 当前播放 - 图片在右侧，信息竖着显示
         json!({
@@ -108,10 +104,11 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
             "text": {
                 "type": "kmarkdown",
                 "content": format!(
-                    " **歌名:** {}\n **歌手:** {}\n **音源:** `{}`",
-                    truncate_text(&data.current.title, 25),
-                    truncate_text(&data.current.author, 15),
-                    platform_display
+                    "  **歌名:  {}**\n  **歌手:  {}**\n  **音源:  {}**\n  **用户:  (font){}(font)[pink]**",
+                    truncate_text(&data.current.title, 30),
+                    truncate_text(&data.current.author, 20),
+                    platform_display,
+                    data.current.sender.nick_name
                 )
             },
             "mode": "right",
@@ -123,22 +120,16 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
         }),
         // 分割线
         json!({
-            "type": "divider"
+            "type": "section",
+            "text": {
+                "type": "kmarkdown",
+                "content": "---"
+            }
         }),
         // 按钮（使用空文本占位实现靠右）
         json!({
             "type": "action-group",
             "elements": [
-                {
-                    "type": "button",
-                    "theme": "secondary",
-                    "value": "",
-                    "text": {
-                        "type": "plain-text",
-                        "content": "                      "
-                    },
-                    "disabled": true
-                },
                 {
                     "type": "button",
                     "theme": "primary",

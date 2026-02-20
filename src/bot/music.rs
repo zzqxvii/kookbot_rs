@@ -654,6 +654,27 @@ impl WyyCommand {
                         
                         drop(netease); // 释放锁
                         
+                        // 发送播放卡片
+                        if let Some(client) = ctx.api_client.read().await.as_ref() {
+                            use crate::common::card::{build_play_card, PlayCardData, PlayMusic, Sender as CardSender};
+                            
+                            let card_data = PlayCardData::new(PlayMusic {
+                                title: music.title.clone(),
+                                author: music.author.clone(),
+                                platform: music.platform.clone(),
+                                pic_url: music.pic_url.clone(),
+                                sender: CardSender {
+                                    nick_name: ctx.data.extra.author.nickname.clone(),
+                                    avatar_url: None,
+                                },
+                            });
+                            
+                            let card_json = build_play_card(&card_data);
+                            if let Ok(msg_id) = client.send_card_message(channel_id, &card_json).await {
+                                crate::common::play_state::set_play_msg_id(msg_id);
+                            }
+                        }
+                        
                         // 加入语音频道并播放
                         if let Some((ip, port, streaming_info)) = self.join_voice_for_streaming(ctx, &vc.id, channel_id).await {
                             if let Some(client) = ctx.api_client.read().await.as_ref() {
