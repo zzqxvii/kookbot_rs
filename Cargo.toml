@@ -64,6 +64,7 @@ regex = "1.10"
 # 二维码生成
 qrcode = "0.14"
 image = "0.25"
+unicode-width = "0.2.2"
 
 [[bin]]
 name = "kook-music-bot"

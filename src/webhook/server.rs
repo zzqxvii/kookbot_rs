@@ -97,7 +97,8 @@ async fn verify_request(
         .ok_or_else(|| BotError::ConfigError("缺少 X-Kook-Signature 头部".to_string()))?;
 
     // 构造签名字符串
-    let payload = format!("{timestamp}.{}", base64::encode(body));
+    use base64::Engine;
+    let payload = format!("{timestamp}.{}", base64::engine::general_purpose::STANDARD.encode(body));
 
     // 计算 HMAC-SHA256
     use hmac::{Hmac, Mac};

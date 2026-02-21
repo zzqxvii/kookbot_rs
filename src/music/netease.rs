@@ -93,6 +93,22 @@ impl NeteaseClient {
         self.cookie.is_some()
     }
     
+    /// 检查 API 是否可用
+    pub async fn check_api(&self) -> Result<()> {
+        let url = format!("{}/login/status", self.base_url);
+        
+        let response = self.http.get(&url).send().await?;
+        
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(BotError::ConfigError(format!(
+                "网易云 API 返回错误状态: {}",
+                response.status()
+            )))
+        }
+    }
+    
     /// 清理 cookie 字符串，移除 Max-Age, Expires, Path 等属性
     fn clean_cookie(raw: &str) -> String {
         raw.split(';')

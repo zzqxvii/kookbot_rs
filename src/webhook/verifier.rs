@@ -69,7 +69,11 @@ pub fn verify_signature(
     }
 
     // 构造待签名字符串
-    let payload = format!("{timestamp}.{}", base64::encode(body));
+    use base64::Engine;
+    let payload = format!(
+        "{timestamp}.{}",
+        base64::engine::general_purpose::STANDARD.encode(body)
+    );
 
     // 计算 HMAC-SHA256
     let mut mac = HmacSha256::new_from_slice(token.as_bytes())
@@ -106,11 +110,14 @@ impl WebhookHeaders {
             }
         }
 
-        let timestamp = timestamp
-            .ok_or_else(|| VerifyError::MissingHeader("X-Kook-Timestamp".to_string()))?;
-        let signature = signature
-            .ok_or_else(|| VerifyError::MissingHeader("X-Kook-Signature".to_string()))?;
+        let timestamp =
+            timestamp.ok_or_else(|| VerifyError::MissingHeader("X-Kook-Timestamp".to_string()))?;
+        let signature =
+            signature.ok_or_else(|| VerifyError::MissingHeader("X-Kook-Signature".to_string()))?;
 
-        Ok(Self { timestamp, signature })
+        Ok(Self {
+            timestamp,
+            signature,
+        })
     }
 }

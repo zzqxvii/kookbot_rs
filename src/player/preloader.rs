@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
 /// 预加载任务
@@ -64,21 +64,16 @@ impl Default for PreloaderConfig {
 pub struct PreloadManager {
     /// 配置
     config: PreloaderConfig,
-    /// 下载信号量（限制并发）
-    semaphore: Arc<Semaphore>,
     /// 预加载状态
     statuses: Arc<Mutex<HashMap<String, PreloadStatus>>>,
     /// 任务发送通道
     task_tx: mpsc::Sender<PreloadTask>,
-    /// 任务接收通道
-    task_rx: Arc<Mutex<mpsc::Receiver<PreloadTask>>>,
 }
 
 impl PreloadManager {
     /// 创建新的预加载管理器
     pub fn new(config: PreloaderConfig) -> Self {
-        let semaphore = Arc::new(Semaphore::new(config.max_concurrent_downloads));
-        let (task_tx, task_rx) = mpsc::channel(100);
+        let (task_tx, _) = mpsc::channel(100);
 
         // 确保缓存目录存在
         let cache_dir = config.cache_dir.clone();
@@ -90,10 +85,8 @@ impl PreloadManager {
 
         Self {
             config,
-            semaphore,
             statuses: Arc::new(Mutex::new(HashMap::new())),
             task_tx,
-            task_rx: Arc::new(Mutex::new(task_rx)),
         }
     }
 

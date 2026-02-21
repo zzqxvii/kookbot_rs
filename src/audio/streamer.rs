@@ -23,10 +23,6 @@ pub struct AudioStreamer {
     direct_streamer: Option<FFmpegDirectStreamer>,
     /// 是否正在运行
     running: Arc<AtomicBool>,
-    /// 音频配置
-    audio_config: AudioConfig,
-    /// 目标地址
-    dest_addr: String,
     /// 流信息
     streaming_info: VoiceStreamingInfo,
 }
@@ -35,7 +31,7 @@ impl AudioStreamer {
     /// 创建新的音频流处理器
     pub fn new(
         streaming_info: &VoiceStreamingInfo,
-        audio_config: AudioConfig,
+        _audio_config: AudioConfig,
         _network_config: NetworkConfig,
     ) -> Result<Self> {
         // 构建目标地址
@@ -75,8 +71,6 @@ impl AudioStreamer {
             opus_encoder,
             direct_streamer: None,
             running: Arc::new(AtomicBool::new(false)),
-            audio_config,
-            dest_addr,
             streaming_info: streaming_info.clone(),
         })
     }

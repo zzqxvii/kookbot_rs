@@ -10,59 +10,27 @@
 token = "你的 Bot Token"
 
 # 连接模式: websocket 或 webhook (默认: websocket)
-# mode = "websocket"
+mode = "websocket"
 
 # 命令前缀 (默认: /)
-# prefix = "/"
-
-# 管理员 ID 列表
-admins = ["你的用户ID"]
+prefix = "/"
 
 # ============================================
-# WebSocket 模式配置
-# ============================================
-
-[websocket]
-# 心跳间隔(秒) (默认: 30)
-# heartbeat_interval = 30
-
-# 是否启用压缩 (默认: true)
-# compress = true
-
-# 重连尝试次数 (默认: 5)
-# reconnect_attempts = 5
-
-# 重连延迟(秒) (默认: 5)
-# reconnect_delay = 5
-
-# ============================================
-# Webhook 模式配置
+# Webhook 模式配置 (仅 webhook 模式需要)
 # ============================================
 
 [webhook]
 # 监听地址 (默认: 0.0.0.0)
-# host = "0.0.0.0"
+host = "0.0.0.0"
 
 # 监听端口 (默认: 8080)
-# port = 8080
+port = 8080
 
 # 回调路径 (默认: /webhook)
-# path = "/webhook"
+path = "/webhook"
 
-# 验证令牌 (必需，从 Kook 开发者平台获取)
+# 验证令牌 (webhook 模式必需，从 Kook 开发者平台获取)
 verify_token = "你的验证令牌"
-
-# 加密密钥 (可选，用于解密消息)
-# encrypt_key = ""
-
-# 是否启用 SSL (默认: false)
-# use_ssl = false
-
-# SSL 证书路径 (use_ssl = true 时需要)
-# cert_path = "/path/to/cert.pem"
-
-# SSL 密钥路径 (use_ssl = true 时需要)
-# key_path = "/path/to/key.pem"
 
 # ============================================
 # 音频配置
@@ -70,17 +38,11 @@ verify_token = "你的验证令牌"
 
 [audio]
 # 默认音量 (0.0 - 1.0) (默认: 0.5)
-# volume = 0.5
+volume = 0.5
 
 # 比特率 (bps) (默认: 128000 = 128kbps)
-# 仅当 Kook 服务器未返回比特率时使用
-# bit_rate = 128000
-
-# 采样率 (默认: 48000，Kook 只支持 48000)
-# sample_rate = 48000
-
-# 声道数 (默认: 2，1=单声道, 2=立体声)
-# channels = 2
+# Kook 支持: 16000, 32000, 64000, 96000, 128000
+bit_rate = 128000
 
 # ============================================
 # 网络配置
@@ -88,19 +50,7 @@ verify_token = "你的验证令牌"
 
 [network]
 # 连接超时(秒) (默认: 30)
-# timeout = 30
-
-# 重试次数 (默认: 3)
-# retries = 3
-
-# RTP 包大小 (默认: 1200)
-# packet_size = 1200
-
-# HTTP 代理 (可选)
-# http_proxy = "http://127.0.0.1:7890"
-
-# HTTPS 代理 (可选)
-# https_proxy = "http://127.0.0.1:7890"
+timeout = 30
 
 # ============================================
 # 音乐源配置
@@ -108,23 +58,14 @@ verify_token = "你的验证令牌"
 
 [music]
 # 音乐缓存目录 (默认: ./cache)
-# cache_dir = "./cache"
+cache_dir = "./cache"
 
-# 最大缓存大小(MB) (默认: 1024)
-# max_cache_size = 1024
-
-# 网易云音乐 API 地址 (默认: http://localhost:3000)
-# 使用 NeteaseCloudMusicApi 项目
-# netease_api_url = "http://localhost:3000"
+# 网易云音乐 API 地址 (必需)
+# 使用 NeteaseCloudMusicApi 项目: https://github.com/Binaryify/NeteaseCloudMusicApi
+netease_api_url = "http://localhost:3000"
 
 # 网易云音乐 Cookie (可选，用于更高音质)
 # netease_cookie = "MUSIC_U=..."
-
-# QQ 音乐 Cookie (可选)
-# qqmusic_cookie = "uin=..."
-
-# Bilibili Cookie (可选)
-# bilibili_cookie = "SESSDATA=..."
 
 # ============================================
 # 播放器配置
@@ -132,33 +73,10 @@ verify_token = "你的验证令牌"
 
 [player]
 # 最大队列长度 (默认: 100)
-# max_queue_size = 100
+max_queue_size = 100
 
 # 是否允许重复歌曲 (默认: false)
-# allow_duplicates = false
-
-# 自动播放 (默认: true)
-# autoplay = true
-
-# 随机播放 (默认: false)
-# shuffle = false
+allow_duplicates = false
 
 # 预加载数量 (默认: 2)
-# preload_count = 2
-
-# ============================================
-# 日志配置
-# ============================================
-
-[log]
-# 日志级别: trace, debug, info, warn, error (默认: info)
-# level = "info"
-
-# 日志文件路径 (可选，不设置则只输出到控制台)
-# file = "logs/kook-music-bot.log"
-
-# 是否输出到控制台 (默认: true)
-# console = true
-
-# 日志格式: compact, pretty, json (默认: compact)
-# format = "compact"
+preload_count = 2

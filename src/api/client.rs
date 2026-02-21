@@ -154,8 +154,6 @@ impl KookClient {
         #[derive(serde::Deserialize)]
         struct GuildListData {
             items: Vec<Guild>,
-            #[serde(default)]
-            meta: serde_json::Value,
         }
 
         let data: GuildListData = self.request(
