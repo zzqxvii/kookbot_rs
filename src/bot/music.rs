@@ -162,11 +162,13 @@ impl CommandHandler for LeaveCommand {
 /// 网易云音乐播放命令
 pub struct WyyCommand {
     netease_client: Arc<RwLock<NeteaseClient>>,
+    cache_dir: String,
+    max_cache_size_mb: u64,
 }
 
 impl WyyCommand {
-    pub fn new(netease_client: Arc<RwLock<NeteaseClient>>) -> Self {
-        Self { netease_client }
+    pub fn new(netease_client: Arc<RwLock<NeteaseClient>>, cache_dir: String, max_cache_size_mb: u64) -> Self {
+        Self { netease_client, cache_dir, max_cache_size_mb }
     }
     
     /// 加入语音频道并返回流信息
@@ -309,6 +311,8 @@ impl WyyCommand {
         let playlist_name = playlist.name.clone();
         let total_count = playlist.track_ids.len();
         let track_ids: Vec<u64> = playlist.track_ids.clone();
+        let cache_dir = self.cache_dir.clone();
+        let max_cache_size_mb = self.max_cache_size_mb;
         
         // 重置播放统计
         crate::common::play_state::reset_stats();
@@ -419,6 +423,9 @@ impl WyyCommand {
                         continue;
                     }
                 };
+                
+                // 下载后清理缓存
+                crate::common::cache::cleanup_cache(&cache_dir, max_cache_size_mb);
                 
                 drop(netease);
                 
@@ -635,6 +642,9 @@ impl WyyCommand {
                             }
                         };
                         
+                        // 下载后清理缓存
+                        crate::common::cache::cleanup_cache(&self.cache_dir, self.max_cache_size_mb);
+                        
                         drop(netease); // 释放锁
                         
                         // 发送播放卡片
@@ -663,12 +673,11 @@ impl WyyCommand {
                             let handle = self.play_song(local_file, ip, port, streaming_info).await;
                             
                             let api_client = ctx.api_client.clone();
-                            let _channel_id = channel_id.clone();
                             let vc_id = vc_id_for_leave.clone();
                             
                             tokio::spawn(async move {
                                 let _ = handle.await;
-                                info!("单曲播放完成，开始清理");
+                                info!("单曲播放完成");
                                 
                                 if let Some(client) = api_client.read().await.as_ref() {
                                     if let Some(msg_id) = crate::common::play_state::take_play_msg_id() {
@@ -945,7 +954,11 @@ pub fn create_music_commands(
     config: BotConfig,
 ) -> Vec<Arc<dyn CommandHandler>> {
     vec![
-        Arc::new(WyyCommand::new(netease_client.clone())),
+        Arc::new(WyyCommand::new(
+            netease_client.clone(), 
+            config.music.cache_dir.clone(),
+            config.music.max_cache_size_mb,
+        )),
         Arc::new(WyyLoginCommand::new(netease_client, config)),
     ]
 }

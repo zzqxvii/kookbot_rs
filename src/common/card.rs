@@ -131,18 +131,16 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
     // 按钮：有队列时显示"下一首"和"停止"，无队列时只显示"停止"
     let button_elements = if data.queue.is_empty() {
         // 单曲播放：只显示停止按钮
-        vec![
-            json!({
-                "type": "button",
-                "theme": "danger",
-                "value": "stop",
-                "click": "return-val",
-                "text": {
-                    "type": "plain-text",
-                    "content": "停止"
-                }
-            })
-        ]
+        vec![json!({
+            "type": "button",
+            "theme": "danger",
+            "value": "stop",
+            "click": "return-val",
+            "text": {
+                "type": "plain-text",
+                "content": "停止"
+            }
+        })]
     } else {
         // 歌单播放：显示下一首和停止按钮
         vec![
@@ -165,7 +163,7 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
                     "type": "plain-text",
                     "content": "停止"
                 }
-            })
+            }),
         ]
     };
 

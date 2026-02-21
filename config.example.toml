@@ -60,12 +60,16 @@ timeout = 30
 # 音乐缓存目录 (默认: ./cache)
 cache_dir = "./cache"
 
+# 最大缓存大小 MB (默认: 1024)
+# 超过此限制会自动删除最旧的缓存文件
+max_cache_size_mb = 1024
+
 # 网易云音乐 API 地址 (必需)
 # 使用 NeteaseCloudMusicApi 项目: https://github.com/Binaryify/NeteaseCloudMusicApi
 netease_api_url = "http://localhost:3000"
 
-# 网易云音乐 Cookie (可选，用于更高音质)
-# netease_cookie = "MUSIC_U=..."
+# 网易云音乐 Cookie (如果需要登录获取更多歌曲信息或下载受限歌曲)
+netease_cookie = ""
 
 # ============================================
 # 播放器配置

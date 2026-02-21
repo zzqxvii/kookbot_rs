@@ -10,6 +10,7 @@ use kook_music_bot::api::KookClient;
 use kook_music_bot::bot::{create_bot, Bot, BotEventHandler, BotWebhookHandler};
 use kook_music_bot::core::config::{BotConfig, ConnectionMode};
 use kook_music_bot::common::logging::init_logging;
+use kook_music_bot::common::cache;
 use kook_music_bot::webhook::WebhookServer;
 use kook_music_bot::gateway::GatewayClient;
 use kook_music_bot::music::NeteaseClient;
@@ -102,16 +103,20 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
     let config_path = config_path.unwrap_or_else(|| PathBuf::from("config.toml"));
     let config = BotConfig::from_file(&config_path)?;
     
-    box_title!("⚙️ 配置信息");
+    info!("╭{}╮", "─".repeat(WIDTH - 2));
+    info!("│{}│", center("⚙️ 配置信息", WIDTH - 2));
+    info!("├{}┤", "─".repeat(WIDTH - 2));
     box_item!("命令前缀", config.prefix);
     box_item!("连接模式", format!("{:?}", config.mode));
     box_item!("Token", format!("{}...{}", 
         &config.token.chars().take(4).collect::<String>(),
         &config.token.chars().last().unwrap_or('?')));
-    box_end!();
+    info!("╰{}╯", "─".repeat(WIDTH - 2));
+    info!("");
     
     check_dependencies()?;
     check_netease_api(&config.music.netease_api_url).await?;
+    cleanup_cache(&config.music.cache_dir, config.music.max_cache_size_mb).await?;
     
     let api_client = KookClient::new(&config)?;
     display_bot_info(&api_client).await;
@@ -243,6 +248,42 @@ async fn check_netease_api(api_url: &str) -> Result<()> {
             Err(anyhow::anyhow!("网易云 API 连接超时"))
         }
     }
+}
+
+async fn cleanup_cache(cache_dir: &str, max_size_mb: u64) -> Result<()> {
+    use std::fs;
+    
+    info!("╭{}╮", "─".repeat(WIDTH - 2));
+    info!("│{}│", center("🧹 缓存清理", WIDTH - 2));
+    info!("├{}┤", "─".repeat(WIDTH - 2));
+    info!("  目录: {}", cache_dir);
+    info!("  限制: {} MB", max_size_mb);
+    
+    let cache_path = std::path::Path::new(cache_dir);
+    if !cache_path.exists() {
+        fs::create_dir_all(cache_path)?;
+        info!("  创建缓存目录");
+        info!("╰{}╯", "─".repeat(WIDTH - 2));
+        info!("");
+        return Ok(());
+    }
+    
+    let current_mb = cache::get_cache_size_mb(cache_dir);
+    info!("  当前: {} MB", current_mb);
+    
+    cache::cleanup_cache(cache_dir, max_size_mb);
+    
+    let after_mb = cache::get_cache_size_mb(cache_dir);
+    if after_mb < current_mb {
+        info!("  清理后: {} MB (释放 {} MB)", after_mb, current_mb - after_mb);
+    } else {
+        info!("  状态: 无需清理");
+    }
+    
+    info!("╰{}╯", "─".repeat(WIDTH - 2));
+    info!("");
+    
+    Ok(())
 }
 
 async fn start_webhook_mode(config: BotConfig, handler: BotWebhookHandler) -> Result<()> {

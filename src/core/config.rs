@@ -93,6 +93,8 @@ impl Default for NetworkConfig {
 pub struct MusicConfig {
     #[serde(default = "default_cache_dir")]
     pub cache_dir: String,
+    #[serde(default = "default_max_cache_size")]
+    pub max_cache_size_mb: u64,
     #[serde(default = "default_netease_api_url")]
     pub netease_api_url: String,
     pub netease_cookie: Option<String>,
@@ -102,6 +104,7 @@ impl Default for MusicConfig {
     fn default() -> Self {
         Self {
             cache_dir: default_cache_dir(),
+            max_cache_size_mb: default_max_cache_size(),
             netease_api_url: default_netease_api_url(),
             netease_cookie: None,
         }
@@ -159,7 +162,9 @@ fn default_webhook_path() -> String {
 fn default_cache_dir() -> String {
     "./cache".to_string()
 }
-
+fn default_max_cache_size() -> u64 {
+    1024
+}
 fn default_netease_api_url() -> String {
     "http://localhost:3000".to_string()
 }
