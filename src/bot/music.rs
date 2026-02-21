@@ -215,8 +215,7 @@ impl WyyCommand {
         None
     }
 
-    /// 播放歌曲文件（在后台线程中运行，不阻塞事件循环）
-    /// 返回一个 JoinHandle，可以 await 等待播放完成
+    /// 播放歌曲文件（在后台线程中运行，返回 JoinHandle 供调用者等待）
     async fn play_song(
         &self,
         file_path: String,
@@ -224,7 +223,6 @@ impl WyyCommand {
         port: u16,
         streaming_info: VoiceStreamingInfo,
     ) -> tokio::task::JoinHandle<()> {
-        // 使用 spawn_blocking 在后台线程运行，不阻塞 tokio 运行时
         tokio::task::spawn_blocking(move || {
             let mut streamer = match FFmpegDirectStreamer::new(StreamerConfig::from(&streaming_info)) {
                 Ok(s) => s,
@@ -662,7 +660,24 @@ impl WyyCommand {
                         
                         // 加入语音频道并播放
                         if let Some((ip, port, streaming_info)) = self.join_voice_for_streaming(ctx, &vc.id, channel_id).await {
-                            self.play_song(local_file, ip, port, streaming_info).await;
+                            let handle = self.play_song(local_file, ip, port, streaming_info).await;
+                            
+                            let api_client = ctx.api_client.clone();
+                            let channel_id = channel_id.clone();
+                            let vc_id = vc_id_for_leave.clone();
+                            
+                            tokio::spawn(async move {
+                                let _ = handle.await;
+                                info!("单曲播放完成，开始清理");
+                                
+                                if let Some(client) = api_client.read().await.as_ref() {
+                                    if let Some(msg_id) = crate::common::play_state::take_play_msg_id() {
+                                        let _ = client.delete_message(&msg_id).await;
+                                    }
+                                    let _ = client.leave_voice_channel(&vc_id).await;
+                                }
+                            });
+                            
                             CommandResult::Ok
                         } else {
                             CommandResult::Error("加入语音频道失败".to_string())
