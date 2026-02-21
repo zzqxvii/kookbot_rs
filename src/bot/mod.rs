@@ -234,49 +234,32 @@ impl EventHandler for BotEventHandler {
             "stop" => {
                 info!("[Bot] 处理停止请求, is_playing={}", play_state::is_playing());
                 info!("[Bot] 当前 PID: {}", play_state::get_pid());
-                
+
                 if play_state::is_playing() {
                     play_state::request_stop();
                     let killed = play_state::kill_process();
                     info!("[Bot] 进程已终止: {}", killed);
-                    
+
                     // 删除播放卡片
                     if let Some(client) = self.bot.api_client.read().await.as_ref() {
                         if let Some(old_msg_id) = play_state::take_play_msg_id() {
                             let _ = client.delete_message(&old_msg_id).await;
                         }
                     }
-                    
+
                     // 离开语音频道
                     let mut vm = self.bot.voice_manager.lock().await;
                     if let Some(ref mut voice_manager) = *vm {
                         let _ = voice_manager.leave_channel().await;
                         *vm = None;
                     }
-                    
-                    // 获取播放统计
-                    let play_count = play_state::get_play_count();
-                    let duration = play_state::get_play_duration();
-                    let duration_min = duration / 60;
-                    let duration_sec = duration % 60;
-                    
-                    // 重置播放状态
-                    play_state::reset_stats();
-                    
+
+                    // 发送停止确认消息
                     if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        let report = format!(
-                            "📊 **本次听歌报告**\n\
-                            ────────────────\n\
-                            🎵 播放歌曲: {} 首\n\
-                            ⏱️ 听歌时长: {}分{}秒\n\
-                            ────────────────\n\
-                            ⏹️ 用户 **{}** 停止了播放",
-                            play_count,
-                            duration_min,
-                            duration_sec,
-                            user_display
-                        );
-                        let _ = client.send_channel_message(channel_id, &report).await;
+                        let _ = client.send_channel_message(
+                            channel_id,
+                            &format!("⏹️ 用户 **{}** 停止了播放", user_display)
+                        ).await;
                     }
                 } else {
                     info!("[Bot] 当前没有正在播放的歌曲");

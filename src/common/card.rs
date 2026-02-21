@@ -126,33 +126,53 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
                 "content": "---"
             }
         }),
-        // 按钮（使用空文本占位实现靠右）
-        json!({
-            "type": "action-group",
-            "elements": [
-                {
-                    "type": "button",
-                    "theme": "primary",
-                    "value": "nextMusic",
-                    "click": "return-val",
-                    "text": {
-                        "type": "plain-text",
-                        "content": "下一首"
-                    }
-                },
-                {
-                    "type": "button",
-                    "theme": "danger",
-                    "value": "stop",
-                    "click": "return-val",
-                    "text": {
-                        "type": "plain-text",
-                        "content": "停止"
-                    }
-                }
-            ]
-        }),
     ];
+
+    // 按钮：有队列时显示"下一首"和"停止"，无队列时只显示"停止"
+    let button_elements = if data.queue.is_empty() {
+        // 单曲播放：只显示停止按钮
+        vec![
+            json!({
+                "type": "button",
+                "theme": "danger",
+                "value": "stop",
+                "click": "return-val",
+                "text": {
+                    "type": "plain-text",
+                    "content": "停止"
+                }
+            })
+        ]
+    } else {
+        // 歌单播放：显示下一首和停止按钮
+        vec![
+            json!({
+                "type": "button",
+                "theme": "primary",
+                "value": "nextMusic",
+                "click": "return-val",
+                "text": {
+                    "type": "plain-text",
+                    "content": "下一首"
+                }
+            }),
+            json!({
+                "type": "button",
+                "theme": "danger",
+                "value": "stop",
+                "click": "return-val",
+                "text": {
+                    "type": "plain-text",
+                    "content": "停止"
+                }
+            })
+        ]
+    };
+
+    modules.push(json!({
+        "type": "action-group",
+        "elements": button_elements
+    }));
 
     // 播放队列 - 带封面
     if !data.queue.is_empty() {
