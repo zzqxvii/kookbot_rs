@@ -181,7 +181,7 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
             "type": "divider"
         }));
 
-        for (idx, music) in data.queue.iter().enumerate().take(2) {
+        for (_idx, music) in data.queue.iter().enumerate().take(2) {
             let pic_url = if music.pic_url.is_empty() {
                 DEFAULT_COVER.to_string()
             } else {

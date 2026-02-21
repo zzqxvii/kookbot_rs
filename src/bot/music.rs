@@ -303,7 +303,7 @@ impl WyyCommand {
         // 在后台任务中播放歌单，不阻塞事件循环
         let netease_client = self.netease_client.clone();
         let api_client = ctx.api_client.clone();
-        let voice_manager = ctx.voice_manager.clone();
+        let _voice_manager = ctx.voice_manager.clone();
         let channel_id = channel_id.clone();
         let vc_id = vc.id.clone();
         let playlist_name = playlist.name.clone();
@@ -338,7 +338,7 @@ impl WyyCommand {
         drop(netease);
         
         let initial_queue = Arc::new(tokio::sync::RwLock::new(initial_queue));
-        let current_song_info = Arc::new(tokio::sync::RwLock::new(None::<(String, String, String)>));
+        let _current_song_info = Arc::new(tokio::sync::RwLock::new(None::<(String, String, String)>));
         
         tokio::spawn(async move {
             info!("开始播放歌单: {}，共 {} 首", playlist_name, total_count);
@@ -663,7 +663,7 @@ impl WyyCommand {
                             let handle = self.play_song(local_file, ip, port, streaming_info).await;
                             
                             let api_client = ctx.api_client.clone();
-                            let channel_id = channel_id.clone();
+                            let _channel_id = channel_id.clone();
                             let vc_id = vc_id_for_leave.clone();
                             
                             tokio::spawn(async move {
