@@ -1,4 +1,4 @@
-# Kook Bot (RKM) 🤖
+# 🎵 KookBot.rs 🤖
 
 [![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -18,6 +18,7 @@
   - **Webhook 模式** - 被动接收 Kook 推送的事件
 - ⚡ **高性能**: Rust 原生实现，内存占用低 (~50MB)，启动快速
 - ⚙️ **灵活配置**: 完善的 TOML 配置系统
+- 📡 **RTP 推流**: 直接将音频推送到 Kook 语音服务器
 
 ## 🛠️ 技术栈
 
@@ -86,19 +87,19 @@ cp config.example.toml config.toml
 
 ```toml
 token = "你的 Kook Bot Token"
-prefix = "!"
-admins = ["你的用户ID"]
+prefix = "/"
 
 [audio]
 volume = 0.5
-bit_rate = 64000
-sample_rate = 48000
-channels = 2
+bit_rate = 128000
 
 [music]
 cache_dir = "./cache"
-max_cache_size = 1024
+max_cache_size_mb = 1024
+netease_api_url = "http://localhost:3000"
 ```
+
+> **注意**: 需要先启动 [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) 并确保端口 3000 可用。
 
 ### 5. 邀请机器人进服务器
 
@@ -121,15 +122,22 @@ cargo run --release -- --config /path/to/config.toml
 
 ## 💬 使用方法
 
-在 Kook 中发送命令（默认前缀 `!`）：
+在 Kook 中发送命令（默认前缀 `/`）：
 
 | 命令 | 别名 | 说明 | 示例 |
 |------|------|------|------|
-| `!help` | `!h` | 显示帮助信息 | `!help` |
-| `!join` | `!j` | 加入你的语音频道 | `!join` |
-| `!leave` | `!l` | 离开语音频道 | `!leave` |
-| `!wyy` | - | 播放网易云音乐 | `!wyy 晴天` |
-| `!wyylogin` | - | 登录网易云账号 | `!wyylogin` |
+| `/help` | `/h` | 显示帮助信息 | `/help` |
+| `/join` | `/j` | 加入你的语音频道 | `/join` |
+| `/leave` | `/l` | 离开语音频道 | `/leave` |
+| `/wyy` | - | 播放网易云音乐 | `/wyy 晴天` |
+| `/wyylogin` | - | 登录网易云账号 | `/wyylogin` |
+
+### 播放支持
+
+- 🎵 **歌曲名称搜索**: `/wyy 晴天`
+- 🔗 **歌曲链接**: `/wyy https://music.163.com/song?id=xxx`
+- 📋 **歌单链接**: `/wyy https://music.163.com/playlist?id=xxx`
+- 🔢 **歌曲 ID**: `/wyy 188755`
 
 ## 🧩 模块化架构
 
@@ -142,7 +150,9 @@ pub struct MyCommand;
 #[async_trait]
 impl CommandHandler for MyCommand {
     fn name(&self) -> &'static str { "mycmd" }
+    fn aliases(&self) -> Vec<&'static str> { vec!["m"] }
     fn description(&self) -> &'static str { "我的自定义命令" }
+    fn usage(&self) -> &'static str { "!mycmd" }
     
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
         CommandResult::Reply("Hello!".to_string())
@@ -162,34 +172,60 @@ router.register(Arc::new(MyCommand));
 | `api` | ✅ 核心 | Kook API 客户端 |
 | `gateway` | ✅ 核心 | WebSocket 连接 |
 | `webhook` | ✅ 核心 | Webhook 服务器 |
-| `audio` | ✅ 核心 | 音频处理 |
-| `player` | ✅ 核心 | 播放控制 |
+| `audio` | ✅ 核心 | 音频处理 (编解码/RTP) |
+| `player` | ✅ 核心 | 播放控制 (队列/播放列表) |
+| `music` | ✅ 核心 | 网易云音乐 API |
+| `common` | ✅ 核心 | 公共工具 (缓存/日志/状态) |
 
 ## 📁 项目结构
 
 ```
-RKM/
+kookbot_rs/
 ├── Cargo.toml              # Rust 项目配置
 ├── config.example.toml     # 配置示例
 ├── config.toml             # 本地配置文件 (gitignored)
 ├── src/
-│   ├── main.rs             # 程序入口（仅启动逻辑）
+│   ├── main.rs             # 程序入口
 │   ├── lib.rs              # 模块导出
-│   ├── bot/                # Bot 核心模块
-│   │   ├── mod.rs          # Bot 主逻辑
-│   │   ├── commands.rs     # 命令系统
-│   │   └── music.rs        # 音乐模块命令
 │   ├── api/                # Kook REST API
+│   │   └── client.rs       # API 客户端实现
 │   ├── audio/              # 音频处理
-│   ├── gateway/            # WebSocket 网关
-│   ├── music/              # 音乐源 API
+│   │   ├── decoder.rs      # 音频解码
+│   │   ├── encoder.rs      # Opus 编码
+│   │   ├── ffmpeg_encoder.rs
+│   │   ├── ffmpeg_streamer.rs
+│   │   ├── rtp.rs         # RTP 推流
+│   │   └── streamer.rs
+│   ├── bot/                # Bot 核心
+│   │   ├── mod.rs         # Bot 主逻辑
+│   │   ├── commands.rs    # 命令系统
+│   │   └── music.rs       # 音乐模块
+│   ├── common/             # 公共工具
+│   │   ├── cache.rs       # 缓存管理
+│   │   ├── card.rs        # Kook 卡片消息
+│   │   ├── logging.rs     # 日志系统
+│   │   ├── models.rs      # 数据模型
+│   │   ├── play_state.rs  # 播放状态
+│   │   └── utils.rs       # 工具函数
+│   ├── core/               # 核心
+│   │   ├── config.rs      # 配置管理
+│   │   └── error.rs       # 错误定义
+│   ├── gateway/            # WebSocket
+│   │   ├── client.rs      # Gateway 客户端
+│   │   ├── events.rs      # 事件定义
+│   │   └── protocol.rs    # 协议实现
+│   ├── music/              # 音乐源
+│   │   ├── downloader.rs  # 音乐下载
+│   │   └── netease.rs     # 网易云 API
 │   ├── player/             # 播放控制
-│   ├── webhook/            # Webhook 服务器
-│   ├── config.rs           # 配置管理
-│   ├── error.rs            # 错误定义
-│   ├── logging.rs          # 日志系统
-│   ├── models.rs           # 数据模型
-│   └── utils.rs            # 工具函数
+│   │   ├── manager.rs     # 语音管理
+│   │   ├── playlist.rs   # 播放列表
+│   │   ├── preloader.rs   # 预加载
+│   │   └── queue.rs       # 队列管理
+│   └── webhook/            # Webhook 服务器
+│       ├── handler.rs     # 事件处理
+│       ├── server.rs      # HTTP 服务器
+│       └── verifier.rs    # 签名验证
 ├── target/                 # 编译输出
 └── cache/                  # 音乐缓存
 ```
@@ -220,7 +256,6 @@ host = "0.0.0.0"
 port = 8080
 path = "/webhook"
 verify_token = "你的验证令牌"
-use_ssl = false
 ```
 
 ### 音频配置
@@ -230,14 +265,23 @@ use_ssl = false
 # 音量 (0.0 - 1.0)
 volume = 0.5
 
-# 比特率，Kook 支持: 16000, 32000, 64000, 96000, 128000
-bit_rate = 64000
+# 比特率 (bps)
+# Kook 支持: 16000, 32000, 64000, 96000, 128000
+bit_rate = 128000
+```
 
-# 采样率，Kook 只支持 48000
-sample_rate = 48000
+### 播放器配置
 
-# 声道数: 1=单声道, 2=立体声
-channels = 2
+```toml
+[player]
+# 最大队列长度
+max_queue_size = 100
+
+# 是否允许重复歌曲
+allow_duplicates = false
+
+# 预加载数量
+preload_count = 2
 ```
 
 ## 🐛 故障排除
@@ -253,11 +297,13 @@ channels = 2
 ```bash
 # 验证 FFmpeg 安装
 ffmpeg -version
-
-# 如果不在 PATH 中，在 config.toml 中指定路径
-[music]
-ffmpeg_path = "/usr/bin/ffmpeg"
 ```
+
+### 网易云 API 不可用
+
+1. 确保 [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) 已启动
+2. 检查 `config.toml` 中的 `netease_api_url` 配置正确
+3. 默认端口 3000 是否被占用
 
 ### 音频播放异常
 
@@ -266,11 +312,10 @@ ffmpeg_path = "/usr/bin/ffmpeg"
    ffmpeg -encoders | grep opus
    ```
 
-2. **调整音频配置**: 尝试降低比特率或改为单声道
+2. **调整音频配置**: 尝试降低比特率
    ```toml
    [audio]
-   bit_rate = 32000
-   channels = 1
+   bit_rate = 64000
    ```
 
 ### Webhook 模式无法接收事件

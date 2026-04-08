@@ -1,5 +1,5 @@
 # Rust 构建产物
-/target/
+target/
 **/*.rs.bk
 Cargo.lock
 
@@ -60,3 +60,7 @@ doc/
 *.tar.gz
 *.tar.bz2
 *.7z
+
+# Pi agent 工作目录
+.bg-shell/
+.gsd/

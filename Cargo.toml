@@ -67,7 +67,7 @@ image = "0.25"
 unicode-width = "0.2.2"
 
 [[bin]]
-name = "kook-music-bot"
+name = "kookbot"
 path = "src/main.rs"
 
 [profile.release]

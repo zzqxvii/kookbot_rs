@@ -180,7 +180,7 @@ impl WyyCommand {
     ) -> Option<(String, u16, VoiceStreamingInfo)> {
         if let Some(api_client) = ctx.api_client.read().await.as_ref() {
             // 先离开频道，确保获取新的推流地址
-            let _ = api_client.leave_voice_channel(channel_id).await;
+            // let _ = api_client.leave_voice_channel(channel_id).await;
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             // 重新加入获取新的推流地址
@@ -432,13 +432,14 @@ impl WyyCommand {
                 // 获取推流地址
                 let (ip, port, streaming_info) = {
                     if let Some(client) = api_client.read().await.as_ref() {
-                        let _ = client.leave_voice_channel(&vc_id).await;
+                        // let _ = client.leave_voice_channel(&vc_id).await;
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         
                         match client.join_voice_channel(&vc_id).await {
                             Ok(conn_info) => {
                                 let ip = conn_info.ip.clone().unwrap_or_default();
                                 let port = conn_info.port.unwrap_or(0);
+                                info!("获取新推流地址: {}:{}", ip, port);
                                 let streaming_info = VoiceStreamingInfo {
                                     ip: ip.clone(),
                                     port: port as u16,
