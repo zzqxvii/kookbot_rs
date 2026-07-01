@@ -104,7 +104,7 @@ pub fn build_play_card(data: &PlayCardData) -> Value {
             "text": {
                 "type": "kmarkdown",
                 "content": format!(
-                    "  **歌名:  {}**\n  **歌手:  {}**\n  **音源:  {}**\n  **用户:  (font){}(font)[pink]**",
+                    "  **歌名:  {}**\n  **歌手:  {}**\n  **音源:  {}**\n  **用户:  {}**",
                     truncate_text(&data.current.title, 30),
                     truncate_text(&data.current.author, 20),
                     platform_display,

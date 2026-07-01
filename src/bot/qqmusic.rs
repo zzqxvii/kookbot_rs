@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 use crate::common::play_state::PlayState;
@@ -181,220 +181,241 @@ impl QQMusicCommand {
             }
         };
 
-        let qqmusic_client = self.qqmusic_client.clone();
-        let api_client = ctx.api_client.clone();
-        let channel_id = channel_id.clone();
         let vc_id = vc.id.clone();
         let playlist_name = playlist.name.clone();
         let total_count = playlist.track_ids.len();
         let track_ids: Vec<u64> = playlist.track_ids.clone();
-        let cache_dir = self.cache_dir.clone();
-        let max_cache_size_mb = self.max_cache_size_mb;
-        let bit_rate = ctx.config.audio.bit_rate;
-        let play_state = self.play_state.clone();
 
         drop(client);
 
 
 
-
-        // 加入语音频道一次，整个歌单共用
-        let (voice_ip, voice_port, voice_streaming_info) = {
-            if let Some(api_client) = api_client.read().await.as_ref() {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                match api_client.join_voice_channel(&vc_id).await {
-                    Ok(conn_info) => {
-                        let ip = conn_info.ip.clone().unwrap_or_default();
-                        let port = conn_info.port.unwrap_or(0);
-                        let info = VoiceStreamingInfo {
-                            ip: ip.clone(),
-                            port: port as u16,
-                            rtcp_port: conn_info
-                                .rtcp_port
-                                .map(|p| p as u16)
-                                .unwrap_or(port as u16 + 1),
-                            rtcp_mux: conn_info.rtcp_mux.unwrap_or(true),
-                            ssrc: conn_info
-                                .audio_ssrc
-                                .map(|s| s as u32)
-                                .unwrap_or(1111),
-                            pt: conn_info.audio_pt.map(|p| p as u8).unwrap_or(111),
-                            bit_rate: conn_info.bitrate.unwrap_or(bit_rate),
-                            sample_rate: 48000,
-                            channels: 2,
-                        };
-                        (ip, port as u16, info)
-                    }
-                    Err(e) => {
-                        warn!("加入语音失败: {}", e);
-                        return CommandResult::Error(format!("加入语音失败: {}", e));
-                    }
-                }
-            } else {
-                return CommandResult::Error("API客户端未初始化".to_string());
-            }
+        // ── 一次性加入语音频道 ──
+        let (gateway_ip, gateway_port, streaming_info) = match self.join_voice_for_streaming(ctx, &vc.id, channel_id).await {
+            Some(info) => info,
+            None => return CommandResult::Error("加入语音频道失败".to_string()),
         };
+        self.play_state.reset_stats();
+
+        // ── 后台任务 ──
+        let requester_name = ctx.data.extra.author.nickname.clone();
+        let qqmusic_client = self.qqmusic_client.clone();
+        let api_client = ctx.api_client.clone();
+        let channel_id = channel_id.clone();
+        let play_state = self.play_state.clone();
 
         tokio::spawn(async move {
-            info!("开始播放QQ歌单: {}，共 {} 首", playlist_name, total_count);
+            let api_cleanup = api_client.clone();
+            let ps_cleanup = play_state.clone();
+            let ch_cleanup = channel_id.clone();
+            let vc_cleanup = vc_id.clone();
 
-            // 预取歌曲详情（后台执行，不阻塞命令响应）
-            let all_songs: Vec<Option<crate::player::Music>> = {
-                let client = qqmusic_client.read().await;
-                let mut songs = Vec::with_capacity(total_count.min(50));
-                for tid in &track_ids {
-                    match client.get_song_detail(*tid).await {
-                        Ok(song) => songs.push(Some(client.to_music(&song))),
+            let result = tokio::task::spawn_blocking(move || {
+                use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
+                use std::sync::Mutex;
+
+                let rt = tokio::runtime::Handle::current();
+                let mut idx: usize = 0;
+                // 预下载：当前歌播放时后台下载下一首
+                let next_file: Arc<Mutex<Option<Option<String>>>> = Arc::new(Mutex::new(None));
+
+                let mut streamer = match FFmpegDirectStreamer::new(
+                    StreamerConfig::from(&streaming_info), play_state.clone()
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("创建流处理器失败: {}", e);
+                        return Err(format!("创建流处理器失败: {}", e));
+                    }
+                };
+
+                let mut stdin = match streamer.start_stream_stdin(
+                    &gateway_ip, gateway_port, streaming_info.rtcp_port
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("启动 stdin pipe 失败: {}", e);
+                        return Err(format!("启动推流失败: {}", e));
+                    }
+                };
+
+                while idx < track_ids.len() {
+                    if play_state.is_stop_requested() {
+                        info!("收到停止请求，终止播放");
+                        break;
+                    }
+
+                    // 获取文件路径：优先用预下载
+                    let file_path = {
+                        let mut guard = next_file.lock().unwrap();
+                        match guard.take() {
+                            Some(Some(p)) => p,
+                            Some(None) => {
+                                warn!("[{}/{}] 预下载失败，跳过", idx + 1, total_count);
+                                idx += 1;
+                                continue;
+                            }
+                            None => {
+                                drop(guard);
+                                let tid = track_ids[idx];
+                                debug!("[{}/{}] 下载中...", idx + 1, total_count);
+                                match rt.block_on(async {
+                                    let client = qqmusic_client.read().await;
+                                    let url = client.get_song_url(tid).await.ok().flatten()?;
+                                    client.download_song(&url, tid).await.ok()
+                                }) {
+                                    Some(p) => p,
+                                    None => {
+                                        warn!("[{}/{}] 下载失败，跳过", idx + 1, total_count);
+                                        idx += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    // 后台预下载下一首
+                    if idx + 1 < track_ids.len() {
+                        let nf = next_file.clone();
+                        let qc = qqmusic_client.clone();
+                        let next_tid = track_ids[idx + 1];
+                        let rt2 = rt.clone();
+                        std::thread::spawn(move || {
+                            let result = rt2.block_on(async {
+                                let client = qc.read().await;
+                                let url = client.get_song_url(next_tid).await.ok().flatten()?;
+                                client.download_song(&url, next_tid).await.ok()
+                            });
+                            *nf.lock().unwrap() = Some(result);
+                        });
+                    }
+
+
+                    let cur_tid = track_ids[idx];
+                    // 更新卡片
+                    rt.block_on(async {
+                        if let Some(client) = api_client.read().await.as_ref() {
+                            let qqmusic = qqmusic_client.read().await;
+                            if let Ok(song) = qqmusic.get_song_detail(cur_tid).await {
+                                let music = qqmusic.to_music(&song);
+                                play_state.set_current_song_duration(music.duration.unwrap_or(0));
+                                use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
+                                let mut data = PlayCardData::new(PlayMusic {
+                                    title: music.title,
+                                    author: music.author,
+                                    platform: music.platform,
+                                    pic_url: music.pic_url,
+                                    sender: CardSender {
+                                        nick_name: requester_name.clone(),
+                                        avatar_url: None,
+                                    },
+                                });
+                                let remaining = total_count.saturating_sub(idx + 1);
+                                let mut queue = Vec::new();
+                                if remaining > 0 {
+                                    for i in 1..=2.min(remaining) {
+                                        let next_tid = track_ids[idx + i];
+                                        if let Ok(next_song) = qqmusic.get_song_detail(next_tid).await {
+                                            let qm = qqmusic.to_music(&next_song);
+                                            queue.push(QueueMusic {
+                                                title: qm.title,
+                                                author: qm.author,
+                                                platform: "QQ音乐".to_string(),
+                                                pic_url: qm.pic_url,
+                                                sender: CardSender { nick_name: "".to_string(), avatar_url: None },
+                                            });
+                                        }
+                                    }
+                                }
+                                data = data.with_queue(queue, remaining);
+                                let json = build_play_card(&data);
+                                if let Some(old) = play_state.take_play_msg_id() {
+                                    let _ = client.delete_message(&old).await;
+                                }
+                                if let Ok(msg_id) = client.send_card_message(&channel_id, &json).await {
+                                    play_state.set_play_msg_id(msg_id);
+                                }
+                            }
+                        }
+                    });
+
+                    // 分块喂入 stdin，每块间检查切歌标志
+                    debug!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
+                    match std::fs::File::open(&file_path) {
+                        Ok(mut f) => {
+                            let mut hdr = [0u8; 10];
+                            if std::io::Read::read_exact(&mut f, &mut hdr).is_ok()
+                                && &hdr[0..3] == b"ID3"
+                            {
+                                let skip = 10
+                                    + ((hdr[6] as u64 & 0x7F) << 21)
+                                    + ((hdr[7] as u64 & 0x7F) << 14)
+                                    + ((hdr[8] as u64 & 0x7F) << 7)
+                                    + (hdr[9] as u64 & 0x7F);
+                                std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip)).ok();
+                            } else {
+                                std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).ok();
+                            }
+                            let mut buf = [0u8; 65536];
+                            loop {
+                                if play_state.is_next_requested() {
+                                    play_state.clear_next_request();
+                                    info!("切歌 → 下一首");
+                                    break;
+                                }
+                                if play_state.is_stop_requested() {
+                                    break;
+                                }
+                                match std::io::Read::read(&mut f, &mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        if std::io::Write::write_all(&mut stdin, &buf[..n]).is_err() {
+                                            error!("写入 stdin 失败");
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("读取文件失败: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         Err(e) => {
-                            warn!("获取QQ歌曲 {} 详情失败: {}", tid, e);
-                            songs.push(None);
+                            error!("打开文件失败: {}: {}", file_path, e);
                         }
                     }
+                    idx += 1;
                 }
-                songs
+
+                drop(stdin);
+                let _ = streamer.wait();
+
+                play_state.set_stopped();
+                Ok(())
+            }).await;
+            // ── 清理 ──
+            let playback_err = match &result {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.clone()),
+                Err(e) => Some(format!("播放线程异常: {}", e)),
             };
-
-            play_state.reset_stats();
-
-            for (index, track_id) in track_ids.iter().enumerate() {
-
-
-                let music = match &all_songs[index] {
-                    Some(m) => m.clone(),
-                    None => {
-                        warn!("QQ音乐歌曲 {} 详情预获取失败，跳过", track_id);
-                        continue;
-                    }
-                };
-                info!("准备播放第 {} 首: {}", index + 1, music.title);
-
-                let client = qqmusic_client.read().await;
-
-
-                let audio_url = match client.get_song_url(*track_id).await {
-                    Ok(Some(url)) => url,
-                    _ => {
-                        warn!("QQ音乐歌曲 {} 无法获取播放链接", music.title);
-                        continue;
-                    }
-                };
-
-                let local_file = match client.download_song(&audio_url, *track_id).await {
-                    Ok(path) => path,
-                    Err(e) => {
-                        warn!("下载QQ音乐歌曲 {} 失败: {}", music.title, e);
-                        continue;
-                    }
-                };
-
-                crate::common::cache::cleanup_cache(&cache_dir, max_cache_size_mb).await;
-
-                drop(client);
-
-                let ip = voice_ip.clone();
-                let port = voice_port;
-                let streaming_info = voice_streaming_info.clone();
-
-                // 发送播放卡片
-                if let Some(api_client) = api_client.read().await.as_ref() {
-                    if let Some(old_msg_id) = play_state.take_play_msg_id() {
-                        let _ = api_client.delete_message(&old_msg_id).await;
-                    }
-
-                    use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
-
-                    let queue: Vec<QueueMusic> = all_songs[(index + 1)..]
-                        .iter()
-                        .filter_map(|opt| opt.as_ref())
-                        .map(|m| QueueMusic {
-                            title: m.title.clone(),
-                            author: m.author.clone(),
-                            platform: m.platform.clone(),
-                            pic_url: m.pic_url.clone(),
-                            sender: CardSender {
-                                nick_name: "".to_string(),
-                                avatar_url: None,
-                            },
-                        })
-                        .collect();
-
-                    let card_data = PlayCardData::new(PlayMusic {
-                        title: music.title.clone(),
-                        author: music.author.clone(),
-                        platform: music.platform.clone(),
-                        pic_url: music.pic_url.clone(),
-                        sender: CardSender {
-                            nick_name: "QQ歌单播放".to_string(),
-                            avatar_url: None,
-                        },
-                    }).with_queue(queue, total_count);
-
-                    let card_json = build_play_card(&card_data);
-                    if let Ok(msg_id) = api_client.send_card_message(&channel_id, &card_json).await {
-                        play_state.set_play_msg_id(msg_id);
-                    }
+            if let Some(client) = api_cleanup.read().await.as_ref() {
+                if let Some(old) = ps_cleanup.take_play_msg_id() {
+                    let _ = client.delete_message(&old).await;
                 }
-
-                play_state.set_playing(0);
-
-                let file = local_file.clone();
-                let ip_clone = ip.clone();
-                let info = streaming_info.clone();
-                let ps = play_state.clone();
-
-                let handle = tokio::task::spawn_blocking(move || {
-                    use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
-
-                    let mut streamer =
-                        match FFmpegDirectStreamer::new(StreamerConfig::from(&info), ps.clone()) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                error!("创建流处理器失败: {}", e);
-                                ps.set_stopped();
-                                return;
-                            }
-                        };
-
-                    if let Err(e) = streamer.start_stream_url(
-                        &file,
-                        &ip_clone,
-                        port,
-                        info.rtcp_port,
-                    ) {
-                        error!("推流失败: {}", e);
+                if !ps_cleanup.is_stop_requested() {
+                    if let Some(err) = &playback_err {
+                        let _ = client.send_channel_message(&ch_cleanup, &format!("❌ 播放出错: {}", err)).await;
                     } else {
-                        let _ = streamer.wait();
+                        let _ = client.send_channel_message(&ch_cleanup,
+                            &format!("✅ QQ歌单 **{}** 播放完成", playlist_name)).await;
                     }
-                    ps.set_stopped();
-                });
-                let _ = handle.await;
-
-                if play_state.is_stop_requested() {
-                    info!("收到停止请求，终止歌单播放");
-                    break;
                 }
-
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let _ = client.leave_voice_channel(&vc_cleanup).await;
             }
-
-            let stopped_by_user = play_state.is_stop_requested();
-            play_state.reset_stats();
-
-            if let Some(api_client) = api_client.read().await.as_ref() {
-                if let Some(old_msg_id) = play_state.take_play_msg_id() {
-                    let _ = api_client.delete_message(&old_msg_id).await;
-                }
-
-                if !stopped_by_user {
-                    let msg = format!("✅ QQ歌单 **{}** 播放完成，感谢收听！", playlist_name);
-                    let _ = api_client.send_channel_message(&channel_id, &msg).await;
-                }
-            }
-
-            if let Some(api_client) = api_client.read().await.as_ref() {
-                let _ = api_client.leave_voice_channel(&vc_id).await;
-            }
-
+            ps_cleanup.reset_stats();
             info!("QQ歌单播放完成");
         });
 
@@ -563,6 +584,9 @@ impl CommandHandler for QQMusicCommand {
             return CommandResult::Reply(
                 "❌ 请提供歌曲链接或搜索关键词\n用法: `/qqmusic <歌曲链接或关键词>`".to_string(),
             );
+        }
+        if self.play_state.is_playing() {
+            return CommandResult::Reply("⏸️ 正在播放中，请先停止当前播放".to_string());
         }
 
         let query = ctx.args.join(" ");

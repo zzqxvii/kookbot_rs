@@ -281,8 +281,6 @@ impl EventHandler for BotEventHandler {
                 
                 if self.bot.play_state.is_playing() {
                     self.bot.play_state.request_next();
-                    let killed = self.bot.play_state.kill_process();
-                    info!("[Bot] 进程已终止: {}", killed);
                     
                     if let Some(client) = self.bot.api_client.read().await.as_ref() {
                         let _ = client.send_channel_message(

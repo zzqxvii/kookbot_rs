@@ -133,21 +133,10 @@ impl CommandRouter {
     
     /// 解析命令
     fn parse_command<'a>(&self, content: &'a str) -> Option<(&'a str, Vec<&'a str>)> {
-        if !content.starts_with(&self.prefix) {
-            return None;
-        }
-        
-        let content = &content[self.prefix.len()..];
+        let content = content.trim_start().strip_prefix(&self.prefix)?;
         let parts: Vec<&str> = content.split_whitespace().collect();
-        
-        if parts.is_empty() {
-            return None;
-        }
-        
-        let cmd = parts[0];
-        let args = parts[1..].to_vec();
-        
-        Some((cmd, args))
+        if parts.is_empty() { return None; }
+        Some((parts[0], parts[1..].to_vec()))
     }
     
     /// 处理消息

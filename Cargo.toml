@@ -2,7 +2,7 @@
 name = "kook-music-bot"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["ZZQ 18736271057@163.com"]
 description = "Kook Bot (RKM) - 用 Rust 编写的 Kook 机器人框架，支持模块化扩展"
 rust-version = "1.93"
 

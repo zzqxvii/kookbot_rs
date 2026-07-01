@@ -305,6 +305,9 @@ impl CommandHandler for BilibiliCommand {
                 "❌ 请提供BV号、视频链接或搜索关键词\n用法: `/bilibili <BV号/视频链接/关键词>`".to_string(),
             );
         }
+        if self.play_state.is_playing() {
+            return CommandResult::Reply("⏸️ 正在播放中，请先停止当前播放".to_string());
+        }
 
         let query = ctx.args.join(" ");
         info!("处理 /bilibili 命令: {}", query);

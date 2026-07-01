@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 use crate::common::play_state::PlayState;
@@ -282,7 +282,7 @@ impl WyyCommand {
 
         // 发送歌单信息
         if let Some(client) = ctx.api_client.read().await.as_ref() {
-            let msg = format!("📋 **歌单：{}**\n共 {} 首，stdin pipe 模式...", playlist_name, total_count);
+            let msg = format!("📋 **歌单：{}**", playlist_name);
             let _ = client.send_channel_message(channel_id, &msg).await;
         }
 
@@ -311,6 +311,7 @@ impl WyyCommand {
         self.play_state.reset_stats();
 
         // ── 后台任务 ──
+        let requester_name = ctx.data.extra.author.nickname.clone();
         let netease_client = self.netease_client.clone();
         let api_client = ctx.api_client.clone();
         let channel_id = channel_id.clone();
@@ -322,169 +323,192 @@ impl WyyCommand {
             let ch_cleanup = channel_id.clone();
             let vc_cleanup = vc_id.clone();
 
-            // ── 预取歌曲详情（后台执行，不阻塞命令响应） ──
-            let all_song_details: Vec<(String, String, String)> = {
-                let netease = netease_client.read().await;
-                let mut details = Vec::with_capacity(track_ids.len().min(50));
-                for &tid in &track_ids {
-                    if let Ok(song) = netease.get_song_detail(tid).await {
-                        let author = song.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
-                        let pic_url = song.album.pic_url.clone();
-                        details.push((song.name.clone(), author, pic_url));
-                    } else {
-                        details.push(("未知".into(), "未知".into(), String::new()));
-                    }
-                }
-                details
-            };
 
             let result = tokio::task::spawn_blocking(move || {
                 use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
+                use std::sync::Mutex;
+
 
                 let rt = tokio::runtime::Handle::current();
                 let mut idx: usize = 0;
-                let cur_ip = gateway_ip.clone();
-                let cur_port = gateway_port;
-                let cur_info = streaming_info.clone();
+                // 预下载：当前歌播放时后台下载下一首
+                let next_file: Arc<Mutex<Option<Option<String>>>> = Arc::new(Mutex::new(None));
 
-                'playback: loop {
-                    if play_state.is_stop_requested() || idx >= track_ids.len() {
+                let mut streamer = match FFmpegDirectStreamer::new(
+                    StreamerConfig::from(&streaming_info), play_state.clone()
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("创建流处理器失败: {}", e);
+                        return Err(format!("创建流处理器失败: {}", e));
+                    }
+                };
+
+                let mut stdin = match streamer.start_stream_stdin(
+                    &gateway_ip, gateway_port, streaming_info.rtcp_port
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("启动 stdin pipe 失败: {}", e);
+                        return Err(format!("启动推流失败: {}", e));
+                    }
+                };
+
+                while idx < track_ids.len() {
+                    if play_state.is_stop_requested() {
+                        info!("收到停止请求，终止播放");
                         break;
                     }
 
-                    let mut streamer = match FFmpegDirectStreamer::new(
-                        StreamerConfig::from(&cur_info), play_state.clone()
-                    ) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            error!("创建流处理器失败: {}", e);
-                            return Err(format!("创建流处理器失败: {}", e));
-                        }
-                    };
-
-                    let mut stdin = match streamer.start_stream_stdin(
-                        &cur_ip, cur_port, cur_info.rtcp_port
-                    ) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            error!("启动 stdin pipe 失败: {}", e);
-                            return Err(format!("启动推流失败: {}", e));
-                        }
-                    };
-
-                    let mut pipe_ok = true;
-                    while idx < track_ids.len() {
-                        if play_state.is_stop_requested() {
-                            info!("收到停止请求，终止播放");
-                            break 'playback;
-                        }
-
-                        let tid = track_ids[idx];
-                        info!("[{}/{}] 下载中...", idx + 1, total_count);
-
-                        let file_path = match rt.block_on(async {
-                            let netease = netease_client.read().await;
-                            let url = netease.get_song_url(tid).await.ok().flatten()?;
-                            netease.download_song(&url, tid).await.ok()
-                        }) {
-                            Some(p) => p,
-                            None => {
-                                warn!("[{}/{}] 下载失败，跳过", idx + 1, total_count);
+                    // 获取文件路径：优先用预下载
+                    let file_path = {
+                        let mut guard = next_file.lock().unwrap();
+                        match guard.take() {
+                            Some(Some(p)) => p,
+                            Some(None) => {
+                                warn!("[{}/{}] 预下载失败，跳过", idx + 1, total_count);
                                 idx += 1;
                                 continue;
                             }
-                        };
-
-                        // 更新卡片
-                        rt.block_on(async {
-                            if let Some(client) = api_client.read().await.as_ref() {
-                                let netease = netease_client.read().await;
-                                if let Ok(song) = netease.get_song_detail(tid).await {
-                                    let music = netease.to_music(&song);
-                                    play_state.set_current_song_duration(music.duration.unwrap_or(0));
-                                    use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
-                                    let mut data = PlayCardData::new(PlayMusic {
-                                        title: music.title,
-                                        author: music.author,
-                                        platform: music.platform,
-                                        pic_url: music.pic_url,
-                                        sender: CardSender {
-                                            nick_name: format!("{}/{}", idx + 1, total_count),
-                                            avatar_url: None,
-                                        },
-                                    });
-                                    let queue: Vec<QueueMusic> = all_song_details[idx+1..].iter()
-                                        .map(|(title, author, pic_url)| QueueMusic {
-                                            title: title.clone(),
-                                            author: author.clone(),
-                                            platform: "网易云".to_string(),
-                                            pic_url: pic_url.clone(),
-                                            sender: CardSender { nick_name: "".to_string(), avatar_url: None },
-                                        })
-                                        .collect();
-                                    data = data.with_queue(queue, total_count.saturating_sub(idx + 1));
-                                    let json = build_play_card(&data);
-                                    if let Some(old) = play_state.take_play_msg_id() {
-                                        let _ = client.delete_message(&old).await;
-                                    }
-                                    if let Ok(msg_id) = client.send_card_message(&channel_id, &json).await {
-                                        play_state.set_play_msg_id(msg_id);
+                            None => {
+                                drop(guard);
+                                let tid = track_ids[idx];
+                                debug!("[{}/{}] 下载中...", idx + 1, total_count);
+                                match rt.block_on(async {
+                                    let netease = netease_client.read().await;
+                                    let url = netease.get_song_url(tid).await.ok().flatten()?;
+                                    netease.download_song(&url, tid).await.ok()
+                                }) {
+                                    Some(p) => p,
+                                    None => {
+                                        warn!("[{}/{}] 下载失败，跳过", idx + 1, total_count);
+                                        idx += 1;
+                                        continue;
                                     }
                                 }
                             }
-                        });
+                        }
+                    };
 
-                        // 喂入 stdin (剥离 ID3v2)
-                        info!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
-                        match std::fs::File::open(&file_path) {
-                            Ok(mut f) => {
-                                let mut hdr = [0u8; 10];
-                                if std::io::Read::read_exact(&mut f, &mut hdr).is_ok()
-                                    && &hdr[0..3] == b"ID3"
-                                {
-                                    let skip = 10
-                                        + ((hdr[6] as u64 & 0x7F) << 21)
-                                        + ((hdr[7] as u64 & 0x7F) << 14)
-                                        + ((hdr[8] as u64 & 0x7F) << 7)
-                                        + (hdr[9] as u64 & 0x7F);
-                                    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip)).ok();
-                                } else {
-                                    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).ok();
+                    // 后台预下载下一首
+                    if idx + 1 < track_ids.len() {
+                        let nf = next_file.clone();
+                        let nc = netease_client.clone();
+                        let next_tid = track_ids[idx + 1];
+                        let rt2 = rt.clone();
+                        std::thread::spawn(move || {
+                            let result = rt2.block_on(async {
+                                let netease = nc.read().await;
+                                let url = netease.get_song_url(next_tid).await.ok().flatten()?;
+                                netease.download_song(&url, next_tid).await.ok()
+                            });
+                            *nf.lock().unwrap() = Some(result);
+                        });
+                    }
+
+                    // 更新卡片
+                    rt.block_on(async {
+                        if let Some(client) = api_client.read().await.as_ref() {
+                            let netease = netease_client.read().await;
+                            let tid = track_ids[idx];
+                            if let Ok(song) = netease.get_song_detail(tid).await {
+                                let music = netease.to_music(&song);
+                                play_state.set_current_song_duration(music.duration.unwrap_or(0));
+                                use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
+                                let mut data = PlayCardData::new(PlayMusic {
+                                    title: music.title,
+                                    author: music.author,
+                                    platform: music.platform,
+                                    pic_url: music.pic_url,
+                                    sender: CardSender {
+                                        nick_name: requester_name.clone(),
+                                        avatar_url: None,
+                                    },
+                                });
+                                let remaining = total_count.saturating_sub(idx + 1);
+                                let mut queue = Vec::new();
+                                if remaining > 0 {
+                                    for i in 1..=2.min(remaining) {
+                                        let next_tid = track_ids[idx + i];
+                                        if let Ok(next_song) = netease.get_song_detail(next_tid).await {
+                                            let author = next_song.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+                                            queue.push(QueueMusic {
+                                                title: next_song.name.clone(),
+                                                author,
+                                                platform: "网易云".to_string(),
+                                                pic_url: next_song.album.pic_url.clone(),
+                                                sender: CardSender { nick_name: "".to_string(), avatar_url: None },
+                                            });
+                                        }
+                                    }
                                 }
-                                if let Err(e) = std::io::copy(&mut f, &mut stdin) {
-                                    error!("喂入 stdin 失败: {}", e);
-                                    pipe_ok = false;
-                                    if play_state.is_next_requested() {
-                                        play_state.clear_next_request();
-                                        info!("切歌 → 下一首");
-                                        idx += 1;
-                                        let _ = streamer.wait();
+                                data = data.with_queue(queue, remaining);
+                                let json = build_play_card(&data);
+                                if let Some(old) = play_state.take_play_msg_id() {
+                                    let _ = client.delete_message(&old).await;
+                                }
+                                if let Ok(msg_id) = client.send_card_message(&channel_id, &json).await {
+                                    play_state.set_play_msg_id(msg_id);
+                                }
+                            }
+                        }
+                    });
+
+                    // 分块喂入 stdin，每块间检查切歌标志
+                    debug!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
+                    match std::fs::File::open(&file_path) {
+                        Ok(mut f) => {
+                            let mut hdr = [0u8; 10];
+                            if std::io::Read::read_exact(&mut f, &mut hdr).is_ok()
+                                && &hdr[0..3] == b"ID3"
+                            {
+                                let skip = 10
+                                    + ((hdr[6] as u64 & 0x7F) << 21)
+                                    + ((hdr[7] as u64 & 0x7F) << 14)
+                                    + ((hdr[8] as u64 & 0x7F) << 7)
+                                    + (hdr[9] as u64 & 0x7F);
+                                std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip)).ok();
+                            } else {
+                                std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).ok();
+                            }
+                            let mut buf = [0u8; 65536];
+                            loop {
+                                if play_state.is_next_requested() {
+                                    play_state.clear_next_request();
+                                    info!("切歌 → 下一首");
+                                    break;
+                                }
+                                if play_state.is_stop_requested() {
+                                    break;
+                                }
+                                match std::io::Read::read(&mut f, &mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        if std::io::Write::write_all(&mut stdin, &buf[..n]).is_err() {
+                                            error!("写入 stdin 失败");
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("读取文件失败: {}", e);
                                         break;
                                     }
-                                    break 'playback;
                                 }
                             }
-                            Err(e) => {
-                                error!("打开文件失败: {}: {}", file_path, e);
-                                idx += 1;
-                                continue;
-                            }
+                            std::io::Write::flush(&mut stdin).ok();
                         }
-                        idx += 1;
+                        Err(e) => {
+                            error!("打开文件失败: {}: {}", file_path, e);
+                        }
                     }
-
-                    if pipe_ok {
-                        drop(stdin);
-                    }
-                    let _ = streamer.wait();
-
-                    // 无需重新加入语音频道，stdin pipe 模式下连接复用
+                    idx += 1;
                 }
+                drop(stdin);
+                let _ = streamer.wait();
 
                 play_state.set_stopped();
                 Ok(())
             }).await;
-
             // ── 清理 ──
             let playback_err = match &result {
                 Ok(Ok(())) => None,
@@ -508,8 +532,7 @@ impl WyyCommand {
             ps_cleanup.reset_stats();
             info!("歌单播放完成");
         });
-
-        CommandResult::Reply(format!("✅ 歌单开始播放，共 {} 首 (stdin pipe)", total_count))
+        CommandResult::Reply(format!("✅ 开始播放，共 {} 首", total_count))
     }
     
     /// 处理单曲播放
@@ -660,6 +683,9 @@ impl CommandHandler for WyyCommand {
             return CommandResult::Reply(
                 "❌ 请提供歌曲链接或搜索关键词\n用法: `/wyy <歌曲链接或关键词>`".to_string()
             );
+        }
+        if self.play_state.is_playing() {
+            return CommandResult::Reply("⏸️ 正在播放中，请先停止当前播放".to_string());
         }
         
         let query = ctx.args.join(" ");
