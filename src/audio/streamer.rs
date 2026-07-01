@@ -86,8 +86,7 @@ impl AudioStreamer {
         let file_path = file_path.as_ref();
         info!("开始流式传输文件: {:?}", file_path);
 
-        // 设置运行状态
-        self.running.store(true, Ordering::SeqCst);
+        self.running.store(true, Ordering::Release);
 
         // 创建音频解码器
         let mut decoder = AudioDecoder::from_path(file_path)?;
@@ -105,8 +104,7 @@ impl AudioStreamer {
         let frame_duration = Duration::from_millis(20); // 20ms 每帧
         let mut interval = interval(frame_duration);
 
-        // 主循环：读取、编码、发送
-        while self.running.load(Ordering::SeqCst) {
+        while self.running.load(Ordering::Acquire) {
             // 尝试读取下一帧
             match decoder.next_frame()? {
                 Some(samples) => {
@@ -163,10 +161,9 @@ impl AudioStreamer {
 
     /// 停止流式传输
     pub fn stop(&mut self) {
-        info!("停止音频流");
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Release);
         
-        if let Some(ref mut streamer) = self.direct_streamer {
+        if let Some(streamer) = &mut self.direct_streamer {
             streamer.stop();
         }
     }
@@ -187,23 +184,21 @@ impl AudioStreamer {
             self.streaming_info.port,
             self.streaming_info.rtcp_port,
         )?;
-        
-        self.running.store(true, Ordering::SeqCst);
+        self.running.store(true, Ordering::Release);
         Ok(())
     }
     
     /// 等待推流结束
     pub fn wait(&mut self) -> Result<()> {
-        if let Some(ref mut streamer) = self.direct_streamer {
+        if let Some(streamer) = &mut self.direct_streamer {
             streamer.wait()?;
         }
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Release);
         Ok(())
     }
 
-    /// 检查是否正在运行
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+        self.running.load(Ordering::Acquire)
     }
 
     /// 获取统计信息

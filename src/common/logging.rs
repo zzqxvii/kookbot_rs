@@ -6,6 +6,7 @@
 
 use owo_colors::OwoColorize;
 use std::fmt;
+use std::sync::LazyLock;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -38,8 +39,12 @@ where
         };
         write!(writer, "{} ", level_str)?;
 
-        // 时间 (日期用/分隔)
-        let timestamp = chrono::Local::now().format("%Y/%m/%d %H:%M:%S");
+        static LOCAL_OFFSET: LazyLock<chrono::FixedOffset> = LazyLock::new(|| {
+            *chrono::Local::now().offset()
+        });
+        let timestamp = chrono::Utc::now()
+            .with_timezone(&*LOCAL_OFFSET)
+            .format("%Y/%m/%d %H:%M:%S");
         write!(writer, "{} ", timestamp)?;
 
         // 文件和行号 (路径固定宽度18字符)

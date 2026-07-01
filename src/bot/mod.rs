@@ -26,6 +26,7 @@ use crate::player::VoiceManager;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub mod streaming;
 pub mod commands;
 pub mod help;
 pub mod lyric;
@@ -328,7 +329,7 @@ impl EventHandler for BotEventHandler {
 
                     // 离开语音频道
                     let mut vm = self.bot.voice_manager.lock().await;
-                    if let Some(voice_manager) = vm.as_mut() {
+                    if let Some(voice_manager) = vm.as_ref() {
                         let _ = voice_manager.leave_channel().await;
                         *vm = None;
                     }

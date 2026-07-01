@@ -37,42 +37,6 @@ impl QQMusicCommand {
         }
     }
 
-    /// 加入语音频道并返回流信息
-    async fn join_voice_for_streaming(
-        &self,
-        ctx: &CommandContext<'_>,
-        channel_id: &str,
-        text_channel: &str,
-    ) -> Option<(String, u16, VoiceStreamingInfo)> {
-        if let Some(api_client) = ctx.api_client.read().await.as_ref() {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            let conn_info = match api_client.join_voice_channel(channel_id).await {
-                Ok(info) => info,
-                Err(e) => {
-                    warn!("加入语音失败: {}", e);
-                    let _ = api_client
-                        .send_channel_message(
-                            text_channel,
-                            &format!("❌ 加入语音频道失败: {}", e),
-                        )
-                        .await;
-                    return None;
-                }
-            };
-
-            let ip = conn_info.ip.clone().unwrap_or_default();
-            let port = conn_info.port.unwrap_or(0);
-            info!("获取新推流地址: {}:{}", ip, port);
-
-            let bit_rate = conn_info.bitrate.unwrap_or(ctx.config.audio.bit_rate);
-
-            let streaming_info = VoiceStreamingInfo::from_conn(&conn_info, bit_rate);
-
-            return Some((ip, port as u16, streaming_info));
-        }
-        None
-    }
 
     /// 播放歌曲文件（在后台线程中运行）
     async fn play_song(
@@ -178,7 +142,7 @@ impl QQMusicCommand {
 
 
         // ── 一次性加入语音频道 ──
-        let (gateway_ip, gateway_port, streaming_info) = match self.join_voice_for_streaming(ctx, &vc.id, channel_id).await {
+        let (gateway_ip, gateway_port, streaming_info) = match crate::bot::streaming::join_voice_for_streaming(ctx, &vc.id, channel_id).await {
             Some(info) => info,
             None => return CommandResult::Error("加入语音频道失败".to_string()),
         };
@@ -507,8 +471,7 @@ impl QQMusicCommand {
                         }
 
                         // 加入语音频道并播放
-                        if let Some((ip, port, streaming_info)) = self
-                            .join_voice_for_streaming(ctx, &vc.id, channel_id)
+                        if let Some((ip, port, streaming_info)) = crate::bot::streaming::join_voice_for_streaming(ctx, &vc.id, channel_id)
                             .await
                         {
                             self.play_state.set_playing(0);

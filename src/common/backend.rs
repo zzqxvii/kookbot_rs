@@ -4,8 +4,10 @@
 //! 实现自动启动、健康检查和优雅关闭。
 
 use std::collections::HashMap;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use std::sync::Mutex;
+use std::time::Duration;
+use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
 /// API 后端配置
@@ -44,7 +46,7 @@ impl ApiBackendManager {
     /// 启动所有启用的后端
     pub async fn start_all(&self) {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_default();
 
@@ -65,7 +67,7 @@ impl ApiBackendManager {
                 Ok(_) => {
                     // 等待健康检查通过
                     let deadline = tokio::time::Instant::now()
-                        + std::time::Duration::from_secs(backend.startup_timeout_secs);
+                        + Duration::from_secs(backend.startup_timeout_secs);
                     let mut started = false;
 
                     while tokio::time::Instant::now() < deadline {
@@ -74,7 +76,7 @@ impl ApiBackendManager {
                             started = true;
                             break;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
                     }
 
                     if !started {
@@ -100,10 +102,7 @@ impl ApiBackendManager {
         }
 
         #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
         let child = cmd.spawn()
             .map_err(|e| format!("无法启动 {}: {}", backend.name, e))?;
@@ -122,18 +121,50 @@ impl ApiBackendManager {
         }
     }
 
-    /// 停止所有子进程
+    /// 停止所有子进程（优雅关闭：SIGTERM → 等待 5s → SIGKILL）
     pub async fn shutdown(&self) {
         let mut processes = self.processes.lock()
             .unwrap_or_else(|e| e.into_inner());
         for (name, mut child) in processes.drain() {
             info!("[ApiBackend] 正在停止 {} ...", name);
-            let _ = child.kill();
-            let _ = child.wait();
+
+            if let Some(pid) = child.id() {
+                send_terminate_signal(pid);
+
+                // 等待最多 5 秒让进程优雅退出
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                let mut exited = false;
+
+                while tokio::time::Instant::now() < deadline {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            info!("[ApiBackend] {} 已退出: {:?}", name, status);
+                            exited = true;
+                            break;
+                        }
+                        Ok(None) => {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Err(e) => {
+                            warn!("[ApiBackend] {} wait error: {}", name, e);
+                            break;
+                        }
+                    }
+                }
+
+                if !exited {
+                    warn!("[ApiBackend] {} 未响应终止信号，强制终止", name);
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                }
+            } else {
+                // 无法获取 PID，直接强杀
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
         }
         info!("[ApiBackend] 所有后端已停止");
     }
-
 }
 
 impl Drop for ApiBackendManager {
@@ -141,10 +172,47 @@ impl Drop for ApiBackendManager {
         let mut processes = self.processes.lock()
             .unwrap_or_else(|e| e.into_inner());
         for (name, mut child) in processes.drain() {
-            tracing::info!("[ApiBackend] 正在停止 {} (Drop) ...", name);
-            let _ = child.kill();
-            let _ = child.wait();
+            info!("[ApiBackend] 正在停止 {} (Drop) ...", name);
+            // 发送 kill 信号（非阻塞）
+            let _ = child.start_kill();
+            // 尝试立即回收，但不阻塞
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    info!("[ApiBackend] {} 已退出 (Drop)", name);
+                }
+                Ok(None) => {
+                    info!("[ApiBackend] {} 未立即退出，交由 OS 回收", name);
+                }
+                Err(e) => {
+                    warn!("[ApiBackend] {} wait error (Drop): {}", name, e);
+                }
+            }
         }
+    }
+}
+
+/// 发送终止信号给进程
+///
+/// Unix: 发送 SIGTERM；Windows: 使用 taskkill（无 /F，允许进程清理）
+fn send_terminate_signal(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .arg("/PID")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 

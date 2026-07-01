@@ -16,10 +16,10 @@ pub struct FFmpegDirectStreamer {
     process: Option<Child>,
     running: Arc<AtomicBool>,
     play_state: Arc<PlayState>,
-    /// concat 播放列表临时文件 (wait 后清理)
+    /// concat 播放列表临时文件 (stop/wait 时清理)
     concat_file: Option<std::path::PathBuf>,
-    /// stderr 读取线程句柄 (stop 时 join)
-    stderr_threads: Vec<std::thread::JoinHandle<()>>,
+    /// stderr 读取任务句柄 (stop/wait 时 join)
+    stderr_threads: Vec<tokio::task::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +44,7 @@ impl From<&VoiceStreamingInfo> for StreamerConfig {
         }
     }
 }
+
 impl FFmpegDirectStreamer {
     pub fn new(config: StreamerConfig, play_state: Arc<PlayState>) -> Result<Self> {
         Self::check_ffmpeg()?;
@@ -68,19 +69,16 @@ impl FFmpegDirectStreamer {
             .output()
             .map_err(|e| {
                 BotError::ConfigError(format!(
-                    "无法启动 FFmpeg: {}。请确保 FFmpeg 已安装并在 PATH 中",
+                    "FFmpeg 未找到或无法执行: {}. 请确保 FFmpeg 已安装并在 PATH 中",
                     e
                 ))
             })?;
 
         if !output.status.success() {
-            return Err(BotError::ConfigError("FFmpeg 版本检查失败".into()));
+            return Err(BotError::ConfigError(
+                "FFmpeg 执行失败，请检查 FFmpeg 安装".into(),
+            ));
         }
-
-        let version = String::from_utf8_lossy(&output.stdout);
-        let first_line = version.lines().next().unwrap_or("Unknown");
-        debug!("FFmpeg 版本: {}", first_line);
-
         Ok(())
     }
 
@@ -98,7 +96,7 @@ impl FFmpegDirectStreamer {
         dest_port: u16,
         rtcp_port: u16,
     ) -> Result<()> {
-        if self.running.load(Ordering::SeqCst) {
+        if self.running.load(Ordering::Acquire) {
             self.stop();
         }
 
@@ -150,28 +148,7 @@ impl FFmpegDirectStreamer {
         info!("FFmpeg 进程已启动 (PID: {:?})", pid);
         self.play_state.set_playing(pid);
 
-        let stderr = child.stderr.take().expect("stderr should be piped");
-        let running = self.running.clone();
-        running.store(true, Ordering::SeqCst);
-
-        let stderr_handle = std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if !running.load(Ordering::SeqCst) {
-                    break;
-                }
-                if let Ok(line) = line {
-                    let line_lower = line.to_lowercase();
-                    // 只显示错误和警告，其他都忽略
-                    if line_lower.contains("error") {
-                        error!("[FFmpeg] {}", line);
-                    } else if line_lower.contains("warning") {
-                        warn!("[FFmpeg] {}", line);
-                    }
-                    // 进度信息 (size=, time=, bitrate=) 和其他日志都不显示
-                }
-            }
-        });
+        let stderr_handle = self.spawn_stderr_reader(&mut child);
         self.stderr_threads.push(stderr_handle);
 
         self.process = Some(child);
@@ -191,7 +168,7 @@ impl FFmpegDirectStreamer {
         dest_port: u16,
         rtcp_port: u16,
     ) -> Result<std::process::ChildStdin> {
-        if self.running.load(Ordering::SeqCst) {
+        if self.running.load(Ordering::Acquire) {
             self.stop();
         }
 
@@ -233,36 +210,18 @@ impl FFmpegDirectStreamer {
         info!("FFmpeg stdin 进程已启动 (PID: {:?})", pid);
         self.play_state.set_playing(pid);
 
-        let stderr = child.stderr.take().expect("stderr should be piped");
-        let running = self.running.clone();
-        running.store(true, Ordering::SeqCst);
-
-        let stderr_handle = std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if !running.load(Ordering::SeqCst) {
-                    break;
-                }
-                if let Ok(line) = line {
-                    let line_lower = line.to_lowercase();
-                    if line_lower.contains("error") {
-                        error!("[FFmpeg] {}", line);
-                    } else if line_lower.contains("warning") {
-                        warn!("[FFmpeg] {}", line);
-                    }
-                }
-            }
-        });
+        let stderr_handle = self.spawn_stderr_reader(&mut child);
         self.stderr_threads.push(stderr_handle);
 
         let stdin = child.stdin.take().expect("stdin should be piped");
         self.process = Some(child);
         Ok(stdin)
     }
+
     /// 从文件列表开始推流 (concat demuxer 模式)
     ///
     /// 使用 FFmpeg concat demuxer 顺序播放多个音频文件。
-    /// 播放列表文件在 wait() 返回后自动清理。
+    /// 播放列表文件在 stop()/wait() 返回后自动清理。
     pub fn start_stream_files(
         &mut self,
         file_paths: &[String],
@@ -270,12 +229,17 @@ impl FFmpegDirectStreamer {
         dest_port: u16,
         rtcp_port: u16,
     ) -> Result<()> {
-        if self.running.load(Ordering::SeqCst) {
+        if self.running.load(Ordering::Acquire) {
             self.stop();
         }
 
         if file_paths.is_empty() {
             return Err(BotError::ConfigError("文件列表为空".into()));
+        }
+
+        // 清理先前残留的 concat 文件
+        if let Some(path) = &self.concat_file {
+            let _ = std::fs::remove_file(path);
         }
 
         // 创建 concat 播放列表文件 (cache 目录，时间戳唯一命名)
@@ -307,7 +271,6 @@ impl FFmpegDirectStreamer {
         info!("🎵 开始 concat 播放: {} 个文件", file_paths.len());
         debug!("Concat 文件: {:?}", concat_path);
 
-
         let mut child = Command::new("ffmpeg")
             .args([
                 "-re",
@@ -338,14 +301,58 @@ impl FFmpegDirectStreamer {
         info!("FFmpeg concat 进程已启动 (PID: {:?})", pid);
         self.play_state.set_playing(pid);
 
-        let stderr = child.stderr.take().expect("stderr should be piped");
-        let running = self.running.clone();
-        running.store(true, Ordering::SeqCst);
+        let stderr_handle = self.spawn_stderr_reader(&mut child);
+        self.stderr_threads.push(stderr_handle);
 
-        let stderr_handle = std::thread::spawn(move || {
+        self.process = Some(child);
+        Ok(())
+    }
+
+    /// 停止推流
+    pub fn stop(&mut self) {
+        self.running.store(false, Ordering::Release);
+        if let Some(mut child) = self.process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            self.play_state.set_stopped();
+            info!("⏹️ 播放已停止");
+        }
+        self.join_stderr_threads();
+        self.cleanup_concat_file();
+    }
+
+    /// 等待推流结束 (自动清理 concat 播放列表文件)
+    pub fn wait(&mut self) -> Result<()> {
+        if let Some(child) = &mut self.process {
+            child.wait().map_err(|e| BotError::IoError(e))?;
+            self.running.store(false, Ordering::Release);
+        }
+        self.join_stderr_threads();
+        self.cleanup_concat_file();
+        Ok(())
+    }
+
+    // ── private helpers ──────────────────────────────────────────
+
+    /// 从 child 取走 stderr，在 spawn_blocking 中逐行读取。
+    ///
+    /// 若 stderr.take() 失败（不应发生），先杀进程再 panic，防止孤儿进程。
+    fn spawn_stderr_reader(&self, child: &mut Child) -> tokio::task::JoinHandle<()> {
+        let stderr = match child.stderr.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.kill();
+                panic!("stderr should be piped");
+            }
+        };
+
+        let running = self.running.clone();
+        running.store(true, Ordering::Release);
+
+        tokio::task::spawn_blocking(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
-                if !running.load(Ordering::SeqCst) {
+                if !running.load(Ordering::Acquire) {
                     break;
                 }
                 if let Ok(line) = line {
@@ -357,44 +364,34 @@ impl FFmpegDirectStreamer {
                     }
                 }
             }
+        })
+    }
+
+    /// Join 所有 stderr 读取任务。
+    ///
+    /// 通过 block_in_place + block_on 安全地在同步/异步上下文中等待。
+    fn join_stderr_threads(&mut self) {
+        if self.stderr_threads.is_empty() {
+            return;
+        }
+        let handles: Vec<_> = self.stderr_threads.drain(..).collect();
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                for h in handles {
+                    let _ = h.await;
+                }
+            });
         });
-        self.stderr_threads.push(stderr_handle);
-
-        self.process = Some(child);
-        Ok(())
     }
 
-    /// 停止推流
-    pub fn stop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
-        if let Some(mut child) = self.process.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-            self.play_state.set_stopped();
-            info!("⏹️ 播放已停止");
+    /// 幂等清理 concat 临时文件。
+    ///
+    /// 不消费 `concat_file`，因此 stop() 和 wait() 均可安全调用。
+    fn cleanup_concat_file(&mut self) {
+        if let Some(path) = &self.concat_file {
+            let _ = std::fs::remove_file(path);
         }
-        // 等待所有 stderr 读取线程结束
-        for handle in self.stderr_threads.drain(..) {
-            let _ = handle.join();
-        }
-        // 清理 concat 临时文件
-        if let Some(path) = self.concat_file.take() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-
-    /// 等待推流结束 (自动清理 concat 播放列表文件)
-    pub fn wait(&mut self) -> Result<()> {
-        if let Some(child) = &mut self.process {
-            let _ = child.wait().map_err(|e| BotError::IoError(e))?;
-            self.running.store(false, Ordering::SeqCst);
-        }
-        // 清理 concat 临时文件
-        if let Some(path) = self.concat_file.take() {
-            let _ = std::fs::remove_file(&path);
-            debug!("已清理 concat 文件: {:?}", path);
-        }
-        Ok(())
     }
 }
 

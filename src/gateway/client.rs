@@ -3,10 +3,11 @@
 use crate::core::error::{BotError, Result};
 use crate::gateway::events::{parse_event, Event, EventHandler};
 use crate::gateway::protocol::{GatewayMessage, Intents, SessionInfo, SignalType};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::{interval, Duration};
 use tokio_tungstenite::{
     connect_async,
@@ -15,11 +16,15 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, trace, warn};
 
+type WsWrite = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+type WsRead = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
+
 /// Gateway 客户端
 pub struct GatewayClient {
     token: String,
     intents: u32,
-    ws_stream: RwLock<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>,
+    ws_write: Mutex<Option<WsWrite>>,
+    ws_read: Mutex<Option<WsRead>>,
     session_info: RwLock<SessionInfo>,
     event_handler: RwLock<Option<Box<dyn EventHandler>>>,
     running: AtomicBool,
@@ -31,7 +36,8 @@ impl GatewayClient {
         Self {
             token: token.into(),
             intents,
-            ws_stream: RwLock::new(None),
+            ws_write: Mutex::new(None),
+            ws_read: Mutex::new(None),
             session_info: RwLock::new(SessionInfo::default()),
             event_handler: RwLock::new(None),
             running: AtomicBool::new(false),
@@ -70,7 +76,10 @@ impl GatewayClient {
         info!("WebSocket 连接已建立");
         info!("HTTP 响应状态: {:?}", response.status());
 
-        *self.ws_stream.write().await = Some(ws_stream);
+        let (write, read) = ws_stream.split();
+
+        *self.ws_write.lock().await = Some(write);
+        *self.ws_read.lock().await = Some(read);
         self.running.store(true, Ordering::Release);
 
         info!("连接完成，开始监听消息...");
@@ -83,14 +92,6 @@ impl GatewayClient {
         info!("Token 前8位: {}...", &self.token.chars().take(8).collect::<String>());
         info!("Intents: {}", self.intents);
         info!("========================================");
-
-        let stream_exists = self.ws_stream.read().await.is_some();
-        info!("WebSocket 流状态: {}", if stream_exists { "存在" } else { "不存在" });
-
-        if !stream_exists {
-            error!("WebSocket 流不存在，无法运行");
-            return Err(BotError::GatewayError("WebSocket 流不存在".to_string()));
-        }
 
         // 等待第一个消息（Hello），最多等待10秒
         info!("等待服务器 Hello 消息...");
@@ -145,9 +146,8 @@ impl GatewayClient {
     }
 
     async fn receive_message(&self) -> Option<Message> {
-        let mut stream_guard = self.ws_stream.write().await;
-
-        if let Some(ref mut stream) = *stream_guard {
+        let mut read_guard = self.ws_read.lock().await;
+        if let Some(ref mut stream) = *read_guard {
             match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
                 Ok(Some(Ok(msg))) => Some(msg),
                 Ok(Some(Err(e))) => {
@@ -200,8 +200,8 @@ impl GatewayClient {
             }
             Message::Ping(data) => {
                 info!("[Gateway] 收到 WebSocket Ping, 长度: {}", data.len());
-                let mut stream = self.ws_stream.write().await;
-                if let Some(ref mut s) = *stream {
+                let mut write = self.ws_write.lock().await;
+                if let Some(ref mut s) = *write {
                     if let Err(e) = s.send(Message::Pong(data)).await {
                         error!("[Gateway] 发送 Pong 失败: {}", e);
                     } else {
@@ -287,8 +287,8 @@ impl GatewayClient {
         });
 
         debug!("[Gateway] 发送心跳 PING, sn={}", sn);
-        let mut stream = self.ws_stream.write().await;
-        if let Some(ref mut s) = *stream {
+        let mut write = self.ws_write.lock().await;
+        if let Some(ref mut s) = *write {
             if let Err(e) = s.send(Message::Text(heartbeat.to_string().into())).await {
                 error!("心跳发送失败: {}", e);
             }
@@ -297,8 +297,8 @@ impl GatewayClient {
 
     async fn send_pong(&self) {
         let pong = GatewayMessage::pong();
-        let mut stream = self.ws_stream.write().await;
-        if let Some(ref mut s) = *stream {
+        let mut write = self.ws_write.lock().await;
+        if let Some(ref mut s) = *write {
             if let Err(e) = s.send(Message::Text(serde_json::to_string(&pong).unwrap_or_default().into())).await {
                 error!("发送 Pong 失败: {}", e);
             }
@@ -327,10 +327,9 @@ impl GatewayClient {
 
     pub async fn disconnect(&self) {
         self.running.store(false, Ordering::Release);
-        let mut stream = self.ws_stream.write().await;
-        if let Some(s) = stream.take() {
-            let (mut write, _) = s.split();
-            let _ = write.close().await;
+        let mut write = self.ws_write.lock().await;
+        if let Some(mut s) = write.take() {
+            let _ = s.close().await;
         }
     }
 

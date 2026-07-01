@@ -91,8 +91,8 @@ impl CommandHandler for LeaveCommand {
     }
     
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
-        let mut vm = ctx.voice_manager.lock().await;
-        if let Some(ref mut voice_manager) = *vm {
+        let vm = ctx.voice_manager.lock().await;
+        if let Some(voice_manager) = vm.as_ref() {
             match voice_manager.leave_channel().await {
                 Ok(_) => CommandResult::Reply("✅ 已离开语音频道".to_string()),
                 Err(e) => CommandResult::Error(format!("离开语音频道失败: {}", e)),

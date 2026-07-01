@@ -53,10 +53,10 @@ impl PlayState {
     // ── 播放控制 ──
 
     pub fn set_playing(&self, pid: u32) {
-        self.pid.store(pid, Ordering::SeqCst);
-        self.running.store(true, Ordering::SeqCst);
-        self.stop_requested.store(false, Ordering::SeqCst);
-        self.next_requested.store(false, Ordering::SeqCst);
+        self.pid.store(pid, Ordering::Release);
+        self.running.store(true, Ordering::Release);
+        self.stop_requested.store(false, Ordering::Release);
+        self.next_requested.store(false, Ordering::Release);
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -68,20 +68,20 @@ impl PlayState {
             }
         }
 
-        self.play_count.fetch_add(1, Ordering::SeqCst);
+        self.play_count.fetch_add(1, Ordering::Relaxed);
         info!("播放状态更新: PID={}, 正在播放", pid);
     }
 
     pub fn set_stopped(&self) {
-        self.pid.store(0, Ordering::SeqCst);
-        self.running.store(false, Ordering::SeqCst);
+        self.pid.store(0, Ordering::Release);
+        self.running.store(false, Ordering::Release);
         info!("播放状态更新: 已停止");
     }
 
     pub fn reset_stats(&self) {
-        self.play_count.store(0, Ordering::SeqCst);
-        self.stop_requested.store(false, Ordering::SeqCst);
-        self.next_requested.store(false, Ordering::SeqCst);
+        self.play_count.store(0, Ordering::Release);
+        self.stop_requested.store(false, Ordering::Release);
+        self.next_requested.store(false, Ordering::Release);
         if let Ok(mut guard) = self.start_time.lock() {
             *guard = None;
         }
@@ -94,15 +94,15 @@ impl PlayState {
     // ── 状态查询 ──
 
     pub fn is_playing(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+        self.running.load(Ordering::Acquire)
     }
 
     pub fn get_pid(&self) -> u32 {
-        self.pid.load(Ordering::SeqCst)
+        self.pid.load(Ordering::Acquire)
     }
 
     pub fn get_play_count(&self) -> u64 {
-        self.play_count.load(Ordering::SeqCst)
+        self.play_count.load(Ordering::Acquire)
     }
 
     pub fn get_start_time(&self) -> Option<u64> {
@@ -125,26 +125,26 @@ impl PlayState {
     // ── 请求信号 ──
 
     pub fn request_stop(&self) {
-        self.stop_requested.store(true, Ordering::SeqCst);
-        self.next_requested.store(false, Ordering::SeqCst);
+        self.stop_requested.store(true, Ordering::Release);
+        self.next_requested.store(false, Ordering::Release);
         info!("请求停止播放");
     }
 
     pub fn request_next(&self) {
-        self.next_requested.store(true, Ordering::SeqCst);
+        self.next_requested.store(true, Ordering::Release);
         info!("请求下一首");
     }
 
     pub fn is_stop_requested(&self) -> bool {
-        self.stop_requested.load(Ordering::SeqCst)
+        self.stop_requested.load(Ordering::Acquire)
     }
 
     pub fn is_next_requested(&self) -> bool {
-        self.next_requested.load(Ordering::SeqCst)
+        self.next_requested.load(Ordering::Acquire)
     }
 
     pub fn clear_next_request(&self) {
-        self.next_requested.store(false, Ordering::SeqCst);
+        self.next_requested.store(false, Ordering::Release);
     }
 
     // ── 消息 ID ──
@@ -179,11 +179,11 @@ impl PlayState {
     // ── 歌曲时长 ──
 
     pub fn set_current_song_duration(&self, duration_secs: u64) {
-        self.current_song_duration.store(duration_secs, Ordering::SeqCst);
+        self.current_song_duration.store(duration_secs, Ordering::Release);
     }
 
     pub fn get_current_song_duration(&self) -> u64 {
-        self.current_song_duration.load(Ordering::SeqCst)
+        self.current_song_duration.load(Ordering::Acquire)
     }
 
     /// 生成播放进度条字符串
@@ -206,7 +206,7 @@ impl PlayState {
     // ── 进程管理 ──
 
     pub fn kill_process(&self) -> bool {
-        let pid = self.pid.load(Ordering::SeqCst);
+        let pid = self.pid.load(Ordering::Acquire);
         if pid > 0 {
             #[cfg(target_os = "windows")]
             {

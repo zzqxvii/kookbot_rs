@@ -75,13 +75,8 @@ impl SilenceSender {
             socket_addr: (dest_ip.to_string(), dest_port),
         }
     }
-    /// 启动静音发送 (后台线程)
-    ///
-    /// 绑定独立的 UDP 端口并生成随机 SSRC。
-    /// 静音流与 FFmpeg 的 RTP 流使用不同的源端口和 SSRC，
-    /// Kook 语音服务器将其视为新的 RTP 源。
     pub fn start(&mut self) -> Result<()> {
-        if self.running.load(Ordering::SeqCst) {
+        if self.running.load(Ordering::Acquire) {
             warn!("SilenceSender 已在运行");
             return Ok(());
         }
@@ -92,8 +87,7 @@ impl SilenceSender {
         socket
             .connect(&dest)
             .map_err(|e| BotError::IoError(e))?;
-
-        self.running.store(true, Ordering::SeqCst);
+        self.running.store(true, Ordering::Release);
 
         let running = self.running.clone();
         let ssrc: u32 = rand::random::<u32>();
@@ -103,8 +97,7 @@ impl SilenceSender {
             let mut seq: u16 = 0;
             let mut ts: u32 = 0;
             let packet = build_silence_rtp();
-
-            while running.load(Ordering::SeqCst) {
+            while running.load(Ordering::Acquire) {
                 // 动态构建包头 (seq + timestamp 每帧变化)
                 let mut buf = Vec::with_capacity(RTP_HEADER_SIZE + OPUS_SILENCE_FRAME.len());
                 push_rtp_header(&mut buf, pt, seq, ts, ssrc);
@@ -129,15 +122,13 @@ impl SilenceSender {
         Ok(())
     }
 
-    /// 停止静音发送
     pub fn stop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Release);
         info!("🔇 SilenceSender 已停止");
     }
 
-    /// 是否正在运行
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+        self.running.load(Ordering::Acquire)
     }
 }
 
