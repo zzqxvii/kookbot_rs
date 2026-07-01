@@ -27,12 +27,24 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub mod commands;
+pub mod help;
+pub mod lyric;
+pub mod search;
+pub mod status;
+pub mod voice;
+pub mod wyylogin;
 pub mod music;
 pub mod qqmusic;
 pub mod bilibili;
+pub use help::HelpCommand;
+pub use lyric::LyricCommand;
+pub use search::UnifiedSearchCommand;
+pub use status::BotStatusCommand;
+pub use voice::{JoinCommand, LeaveCommand};
+pub use wyylogin::WyyLoginCommand;
 
 use commands::{CommandResult, CommandRouter};
-use music::{create_music_commands, HelpCommand, JoinCommand, LeaveCommand, UnifiedSearchCommand};
+use music::create_music_commands;
 use qqmusic::create_qqmusic_commands;
 use bilibili::create_bilibili_commands;
 

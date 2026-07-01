@@ -67,20 +67,7 @@ impl QQMusicCommand {
 
             let bit_rate = conn_info.bitrate.unwrap_or(ctx.config.audio.bit_rate);
 
-            let streaming_info = VoiceStreamingInfo {
-                ip: ip.clone(),
-                port: port as u16,
-                rtcp_port: conn_info
-                    .rtcp_port
-                    .map(|p| p as u16)
-                    .unwrap_or(port as u16 + 1),
-                rtcp_mux: conn_info.rtcp_mux.unwrap_or(true),
-                ssrc: conn_info.audio_ssrc.map(|s| s as u32).unwrap_or(1111),
-                pt: conn_info.audio_pt.map(|p| p as u8).unwrap_or(111),
-                bit_rate,
-                sample_rate: 48000,
-                channels: 2,
-            };
+            let streaming_info = VoiceStreamingInfo::from_conn(&conn_info, bit_rate);
 
             return Some((ip, port as u16, streaming_info));
         }

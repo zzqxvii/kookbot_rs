@@ -32,6 +32,15 @@ pub struct Sender {
     pub nick_name: String,
     pub avatar_url: Option<String>,
 }
+impl Default for Sender {
+    fn default() -> Self {
+        Self {
+            nick_name: "未知用户".to_string(),
+            avatar_url: None,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PlayMusic {

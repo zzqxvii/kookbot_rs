@@ -7,23 +7,11 @@ pub use manager::VoiceManager;
 pub use playlist::{Playlist, PlayMode};
 pub use preloader::{PreloadManager, PreloadStatus, PreloadTask};
 pub use queue::{QueueItem, QueueItemStatus, QueueManager, QueueConfig};
+pub use crate::common::card::Sender;
+
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Sender {
-    pub nick_name: String,
-    pub avatar_url: Option<String>,
-}
-
-impl Default for Sender {
-    fn default() -> Self {
-        Self {
-            nick_name: "未知用户".to_string(),
-            avatar_url: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Music {
@@ -73,4 +61,22 @@ pub struct VoiceStreamingInfo {
     pub sample_rate: u32,
     /// 声道数
     pub channels: usize,
+}
+
+impl VoiceStreamingInfo {
+    pub fn from_conn(conn: &crate::common::models::VoiceConnectionInfo, fallback_bitrate: i32) -> Self {
+        let ip = conn.ip.clone().unwrap_or_default();
+        let port = conn.port.unwrap_or(0) as u16;
+        Self {
+            ip: ip.clone(),
+            port,
+            rtcp_port: conn.rtcp_port.map(|p| p as u16).unwrap_or(port + 1),
+            rtcp_mux: conn.rtcp_mux.unwrap_or(true),
+            ssrc: conn.audio_ssrc.map(|s| s as u32).unwrap_or(1111),
+            pt: conn.audio_pt.map(|p| p as u8).unwrap_or(111),
+            bit_rate: conn.bitrate.unwrap_or(fallback_bitrate),
+            sample_rate: 48000,
+            channels: 2,
+        }
+    }
 }
