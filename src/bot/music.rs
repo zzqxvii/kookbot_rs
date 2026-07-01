@@ -14,8 +14,9 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
+use crate::common::play_state::PlayState;
 use crate::core::config::BotConfig;
-use crate::music::NeteaseClient;
+use crate::music::{NeteaseClient, QQMusicClient, BilibiliClient};
 use crate::player::VoiceStreamingInfo;
 use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
 
@@ -162,13 +163,15 @@ impl CommandHandler for LeaveCommand {
 /// 网易云音乐播放命令
 pub struct WyyCommand {
     netease_client: Arc<RwLock<NeteaseClient>>,
+    play_state: Arc<PlayState>,
     cache_dir: String,
     max_cache_size_mb: u64,
 }
 
 impl WyyCommand {
-    pub fn new(netease_client: Arc<RwLock<NeteaseClient>>, cache_dir: String, max_cache_size_mb: u64) -> Self {
-        Self { netease_client, cache_dir, max_cache_size_mb }
+
+    pub fn new(netease_client: Arc<RwLock<NeteaseClient>>, play_state: Arc<PlayState>, cache_dir: String, max_cache_size_mb: u64) -> Self {
+        Self { netease_client, play_state, cache_dir, max_cache_size_mb }
     }
     
     /// 加入语音频道并返回流信息
@@ -225,8 +228,9 @@ impl WyyCommand {
         port: u16,
         streaming_info: VoiceStreamingInfo,
     ) -> tokio::task::JoinHandle<()> {
+        let play_state = self.play_state.clone();
         tokio::task::spawn_blocking(move || {
-            let mut streamer = match FFmpegDirectStreamer::new(StreamerConfig::from(&streaming_info)) {
+            let mut streamer = match FFmpegDirectStreamer::new(StreamerConfig::from(&streaming_info), play_state.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     error!("创建流处理器失败: {}", e);
@@ -237,18 +241,21 @@ impl WyyCommand {
             match streamer.start_stream_url(&file_path, &ip, port, streaming_info.rtcp_port) {
                 Ok(_) => {
                     let _ = streamer.wait();
-                    crate::common::play_state::set_stopped();
+                    play_state.set_stopped();
                     info!("🎵 歌曲播放完成");
                 }
                 Err(e) => {
                     error!("推流失败: {}", e);
-                    crate::common::play_state::set_stopped();
+                    play_state.set_stopped();
                 }
             }
         })
     }
     
-    /// 处理歌单播放
+    /// 处理歌单播放 (stdin pipe 模式)
+    ///
+    /// 一次 join_voice，FFmpeg 从 stdin 读取逐首喂入的 MP3 数据。
+    /// 支持停止和切歌：切歌时杀 FFmpeg → rejoin → 重启管道继续剩余歌曲。
     async fn handle_playlist(
         &self,
         ctx: &CommandContext<'_>,
@@ -257,330 +264,252 @@ impl WyyCommand {
         let channel_id = &ctx.data.target_id;
         let guild_id = &ctx.data.extra.guild_id;
         let user_id = &ctx.data.author_id;
-        
-        let netease = self.netease_client.read().await;
-        let playlist = match netease.get_playlist_detail(playlist_id).await {
-            Ok(p) => p,
-            Err(e) => {
-                return CommandResult::Error(format!("获取歌单失败: {}", e));
+
+        // ── 获取歌单元数据 ──
+        let (playlist_name, track_ids, total_count) = {
+            let netease = self.netease_client.read().await;
+            let playlist = match netease.get_playlist_detail(playlist_id).await {
+                Ok(p) => p,
+                Err(e) => return CommandResult::Error(format!("获取歌单失败: {}", e)),
+            };
+            if playlist.track_ids.is_empty() {
+                return CommandResult::Reply("❌ 歌单为空".to_string());
             }
+            (playlist.name.clone(), playlist.track_ids.clone(), playlist.track_ids.len())
         };
-        
-        if playlist.track_ids.is_empty() {
-            return CommandResult::Reply("❌ 歌单为空".to_string());
-        }
-        
-        let msg = format!(
-            "📋 **歌单：{}**\n共 {} 首歌曲，开始播放...",
-            playlist.name,
-            playlist.track_ids.len()
-        );
-        
+
+
+
         // 发送歌单信息
         if let Some(client) = ctx.api_client.read().await.as_ref() {
+            let msg = format!("📋 **歌单：{}**\n共 {} 首，stdin pipe 模式...", playlist_name, total_count);
             let _ = client.send_channel_message(channel_id, &msg).await;
         }
-        
+
         // 获取用户语音频道
         let voice_channel = {
             if let Some(client) = ctx.api_client.read().await.as_ref() {
                 match client.get_user_voice_channel(guild_id, user_id).await {
                     Ok(ch) => ch,
-                    Err(e) => {
-                        return CommandResult::Error(format!("获取语音频道失败: {}", e));
-                    }
+                    Err(e) => return CommandResult::Error(format!("获取语音频道失败: {}", e)),
                 }
             } else {
                 return CommandResult::Error("API 客户端不可用".to_string());
             }
         };
-        
         let vc = match voice_channel {
             Some(vc) => vc,
-            None => {
-                return CommandResult::Reply("⚠️ 你当前不在任何语音频道中".to_string());
-            }
+            None => return CommandResult::Reply("⚠️ 你当前不在任何语音频道中".to_string()),
         };
-        
-        // 在后台任务中播放歌单，不阻塞事件循环
+
+        // ── 一次性加入语音频道 ──
+        let (gateway_ip, gateway_port, streaming_info) = match self.join_voice_for_streaming(ctx, &vc.id, channel_id).await {
+            Some(info) => info,
+            None => return CommandResult::Error("加入语音频道失败".to_string()),
+        };
+        let vc_id = vc.id.clone();
+        self.play_state.reset_stats();
+
+        // ── 后台任务 ──
         let netease_client = self.netease_client.clone();
         let api_client = ctx.api_client.clone();
-        let _voice_manager = ctx.voice_manager.clone();
         let channel_id = channel_id.clone();
-        let vc_id = vc.id.clone();
-        let playlist_name = playlist.name.clone();
-        let total_count = playlist.track_ids.len();
-        let track_ids: Vec<u64> = playlist.track_ids.clone();
-        let cache_dir = self.cache_dir.clone();
-        let max_cache_size_mb = self.max_cache_size_mb;
-        
-        // 重置播放统计
-        crate::common::play_state::reset_stats();
-        
-        // 只获取前3首歌曲信息（用于第一张卡片显示）
-        info!("获取前3首歌曲信息用于初始卡片...");
-        let initial_songs: Vec<_> = match netease.get_songs_detail(&track_ids.iter().take(3).cloned().collect::<Vec<_>>()).await {
-            Ok(songs) => songs,
-            Err(_) => Vec::new(),
-        };
-        
-        // 构建初始队列信息（包含正在播放的歌曲，确保队列顺序与实际播放顺序一致）
-        // 第1首是当前正在播放的，第2、3首是等待播放的
-        let initial_queue: Vec<(String, String, String)> = initial_songs.iter()
-            .map(|song| {
-                let author = song.artists.iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let pic_url = song.album.pic_url.clone();
-                (song.name.clone(), author, pic_url)
-            })
-            .collect();
-        
-        info!("获取完成，初始队列 {} 首（歌单共 {} 首）", initial_queue.len(), total_count);
-        
-        drop(netease);
-        
-        let initial_queue = Arc::new(tokio::sync::RwLock::new(initial_queue));
-        let _current_song_info = Arc::new(tokio::sync::RwLock::new(None::<(String, String, String)>));
-        
+        let play_state = self.play_state.clone();
+
         tokio::spawn(async move {
-            info!("开始播放歌单: {}，共 {} 首", playlist_name, total_count);
-            
-            for (index, track_id) in track_ids.iter().enumerate() {
-                // 检查停止请求
-                if crate::common::play_state::is_stop_requested() {
-                    info!("收到停止请求，终止歌单播放");
-                    break;
-                }
-                
+            let api_cleanup = api_client.clone();
+            let ps_cleanup = play_state.clone();
+            let ch_cleanup = channel_id.clone();
+            let vc_cleanup = vc_id.clone();
+
+            // ── 预取歌曲详情（后台执行，不阻塞命令响应） ──
+            let all_song_details: Vec<(String, String, String)> = {
                 let netease = netease_client.read().await;
-                
-                // 获取当前歌曲信息
-                let song = match netease.get_song_detail(*track_id).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("获取歌曲 {} 详情失败: {}", track_id, e);
-                        continue;
-                    }
-                };
-                
-                info!("当前播放: {}, 队列状态: {:?}", song.name, initial_queue.read().await);
-
-                let music = netease.to_music(&song);
-                info!("准备播放第 {} 首: {}", index + 1, song.name);
-
-                // 记录播放统计（在播放前）
-                crate::common::play_state::set_playing(0); // PID 由 FFmpegDirectStreamer 内部获取
-                
-                // 获取下一首新歌信息（用于更新队列，保持队列长度为3）
-                // 当前队列已有3首（包括当前播放的），需要补充1首新歌在末尾
-                let mut next_songs_info: Vec<(String, String, String)> = Vec::new(); // (歌名, 歌手, 封面)
-                // 计算需要补充的歌曲位置：当前索引 + 3（当前播放 + 队列中2首 = 3首，下一首新的是第4首）
-                let next_song_index = index + 3;
-                if next_song_index < track_ids.len() {
-                    match netease.get_song_detail(track_ids[next_song_index]).await {
-                        Ok(next_song) => {
-                            let author = next_song.artists.iter()
-                                .map(|a| a.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let pic_url = next_song.album.pic_url.clone();
-                            next_songs_info.push((next_song.name.clone(), author, pic_url));
-                        }
-                        _ => {}
-                    }
-                }
-                
-                // 先读取当前队列用于显示（在更新之前，确保显示顺序与实际播放顺序一致）
-                let queue_songs: Vec<(String, String, String)> = initial_queue.read().await.clone();
-
-                // 更新队列：移除已播放的，添加新获取的（用于下一次循环）
-                {
-                    let mut queue = initial_queue.write().await;
-                    if !queue.is_empty() {
-                        queue.remove(0);
-                    }
-                    for info in next_songs_info {
-                        queue.push(info);
-                    }
-                }
-                
-                // 获取歌曲 URL（这个必须实时获取，因为会过期）
-                let audio_url = match netease.get_song_url(*track_id).await {
-                    Ok(Some(url)) => url,
-                    _ => {
-                        warn!("歌曲 {} 无法获取播放链接", song.name);
-                        continue;
-                    }
-                };
-                
-                // 下载歌曲
-                let local_file = match netease.download_song(&audio_url, *track_id).await {
-                    Ok(path) => path,
-                    Err(e) => {
-                        warn!("下载歌曲 {} 失败: {}", song.name, e);
-                        continue;
-                    }
-                };
-                
-                // 下载后清理缓存
-                crate::common::cache::cleanup_cache(&cache_dir, max_cache_size_mb);
-                
-                drop(netease);
-                
-                // 获取推流地址
-                let (ip, port, streaming_info) = {
-                    if let Some(client) = api_client.read().await.as_ref() {
-                        // let _ = client.leave_voice_channel(&vc_id).await;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        
-                        match client.join_voice_channel(&vc_id).await {
-                            Ok(conn_info) => {
-                                let ip = conn_info.ip.clone().unwrap_or_default();
-                                let port = conn_info.port.unwrap_or(0);
-                                info!("获取新推流地址: {}:{}", ip, port);
-                                let streaming_info = VoiceStreamingInfo {
-                                    ip: ip.clone(),
-                                    port: port as u16,
-                                    rtcp_port: conn_info.rtcp_port.map(|p| p as u16).unwrap_or(port as u16 + 1),
-                                    rtcp_mux: conn_info.rtcp_mux.unwrap_or(true),
-                                    ssrc: conn_info.audio_ssrc.map(|s| s as u32).unwrap_or(1111),
-                                    pt: conn_info.audio_pt.map(|p| p as u8).unwrap_or(111),
-                                    bit_rate: conn_info.bitrate.unwrap_or(128000),
-                                    sample_rate: 48000,
-                                    channels: 2,
-                                };
-                                (ip, port as u16, streaming_info)
-                            }
-                            Err(e) => {
-                                warn!("加入语音失败: {}", e);
-                                break;
-                            }
-                        }
+                let mut details = Vec::with_capacity(track_ids.len().min(50));
+                for &tid in &track_ids {
+                    if let Ok(song) = netease.get_song_detail(tid).await {
+                        let author = song.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+                        let pic_url = song.album.pic_url.clone();
+                        details.push((song.name.clone(), author, pic_url));
                     } else {
+                        details.push(("未知".into(), "未知".into(), String::new()));
+                    }
+                }
+                details
+            };
+
+            let result = tokio::task::spawn_blocking(move || {
+                use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
+
+                let rt = tokio::runtime::Handle::current();
+                let mut idx: usize = 0;
+                let cur_ip = gateway_ip.clone();
+                let cur_port = gateway_port;
+                let cur_info = streaming_info.clone();
+
+                'playback: loop {
+                    if play_state.is_stop_requested() || idx >= track_ids.len() {
                         break;
                     }
-                };
-                
-                // 发送播放卡片
-                info!("准备发送播放卡片, channel_id: {}", channel_id);
-                if let Some(client) = api_client.read().await.as_ref() {
-                    // 删除旧卡片
-                    if let Some(old_msg_id) = crate::common::play_state::take_play_msg_id() {
-                        let _ = client.delete_message(&old_msg_id).await;
-                    }
-                    
-                    use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
-                    
-                    // 构建队列歌曲（跳过第一首，因为它是当前正在播放的）
-                    let queue: Vec<QueueMusic> = queue_songs.iter().skip(1)
-                        .map(|(title, author, pic_url)| QueueMusic {
-                            title: title.clone(),
-                            author: author.clone(),
-                            platform: "网易云".to_string(),
-                            pic_url: pic_url.clone(),
-                            sender: CardSender {
-                                nick_name: "".to_string(),
-                                avatar_url: None,
-                            },
-                        })
-                        .collect();
-                    
-                    let card_data = PlayCardData::new(PlayMusic {
-                        title: music.title.clone(),
-                        author: music.author.clone(),
-                        platform: music.platform.clone(),
-                        pic_url: music.pic_url.clone(),
-                        sender: CardSender {
-                            nick_name: "歌单播放".to_string(),
-                            avatar_url: None,
-                        },
-                    }).with_queue(queue, track_ids.len() - index);
-                    
-                    let card_json = build_play_card(&card_data);
-                    info!("卡片 JSON: {}", card_json);
-                    
-                    match client.send_card_message(&channel_id, &card_json).await {
-                        Ok(msg_id) => {
-                            info!("卡片发送成功, msg_id: {}", msg_id);
-                            crate::common::play_state::set_play_msg_id(msg_id);
-                        }
-                        Err(e) => {
-                            error!("卡片发送失败: {}", e);
-                        }
-                    }
-                }
-                
-                // 记录播放统计（在启动播放前）
-                crate::common::play_state::set_playing(0); // PID 在 FFmpegDirectStreamer 内部获取
 
-                // 在后台线程播放（阻塞等待完成）
-                let file = local_file.clone();
-                let ip_clone = ip.clone();
-                let info = streaming_info.clone();
-
-                let handle = tokio::task::spawn_blocking(move || {
-                    use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
-
-                    let mut streamer = match FFmpegDirectStreamer::new(StreamerConfig::from(&info)) {
+                    let mut streamer = match FFmpegDirectStreamer::new(
+                        StreamerConfig::from(&cur_info), play_state.clone()
+                    ) {
                         Ok(s) => s,
                         Err(e) => {
                             error!("创建流处理器失败: {}", e);
-                            crate::common::play_state::set_stopped();
-                            return;
+                            return Err(format!("创建流处理器失败: {}", e));
                         }
                     };
 
-                    if let Err(e) = streamer.start_stream_url(&file, &ip_clone, port, info.rtcp_port) {
-                        error!("推流失败: {}", e);
-                    } else {
-                        let _ = streamer.wait();
+                    let mut stdin = match streamer.start_stream_stdin(
+                        &cur_ip, cur_port, cur_info.rtcp_port
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("启动 stdin pipe 失败: {}", e);
+                            return Err(format!("启动推流失败: {}", e));
+                        }
+                    };
+
+                    let mut pipe_ok = true;
+                    while idx < track_ids.len() {
+                        if play_state.is_stop_requested() {
+                            info!("收到停止请求，终止播放");
+                            break 'playback;
+                        }
+
+                        let tid = track_ids[idx];
+                        info!("[{}/{}] 下载中...", idx + 1, total_count);
+
+                        let file_path = match rt.block_on(async {
+                            let netease = netease_client.read().await;
+                            let url = netease.get_song_url(tid).await.ok().flatten()?;
+                            netease.download_song(&url, tid).await.ok()
+                        }) {
+                            Some(p) => p,
+                            None => {
+                                warn!("[{}/{}] 下载失败，跳过", idx + 1, total_count);
+                                idx += 1;
+                                continue;
+                            }
+                        };
+
+                        // 更新卡片
+                        rt.block_on(async {
+                            if let Some(client) = api_client.read().await.as_ref() {
+                                let netease = netease_client.read().await;
+                                if let Ok(song) = netease.get_song_detail(tid).await {
+                                    let music = netease.to_music(&song);
+                                    play_state.set_current_song_duration(music.duration.unwrap_or(0));
+                                    use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
+                                    let mut data = PlayCardData::new(PlayMusic {
+                                        title: music.title,
+                                        author: music.author,
+                                        platform: music.platform,
+                                        pic_url: music.pic_url,
+                                        sender: CardSender {
+                                            nick_name: format!("{}/{}", idx + 1, total_count),
+                                            avatar_url: None,
+                                        },
+                                    });
+                                    let queue: Vec<QueueMusic> = all_song_details[idx+1..].iter()
+                                        .map(|(title, author, pic_url)| QueueMusic {
+                                            title: title.clone(),
+                                            author: author.clone(),
+                                            platform: "网易云".to_string(),
+                                            pic_url: pic_url.clone(),
+                                            sender: CardSender { nick_name: "".to_string(), avatar_url: None },
+                                        })
+                                        .collect();
+                                    data = data.with_queue(queue, total_count.saturating_sub(idx + 1));
+                                    let json = build_play_card(&data);
+                                    if let Some(old) = play_state.take_play_msg_id() {
+                                        let _ = client.delete_message(&old).await;
+                                    }
+                                    if let Ok(msg_id) = client.send_card_message(&channel_id, &json).await {
+                                        play_state.set_play_msg_id(msg_id);
+                                    }
+                                }
+                            }
+                        });
+
+                        // 喂入 stdin (剥离 ID3v2)
+                        info!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
+                        match std::fs::File::open(&file_path) {
+                            Ok(mut f) => {
+                                let mut hdr = [0u8; 10];
+                                if std::io::Read::read_exact(&mut f, &mut hdr).is_ok()
+                                    && &hdr[0..3] == b"ID3"
+                                {
+                                    let skip = 10
+                                        + ((hdr[6] as u64 & 0x7F) << 21)
+                                        + ((hdr[7] as u64 & 0x7F) << 14)
+                                        + ((hdr[8] as u64 & 0x7F) << 7)
+                                        + (hdr[9] as u64 & 0x7F);
+                                    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip)).ok();
+                                } else {
+                                    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).ok();
+                                }
+                                if let Err(e) = std::io::copy(&mut f, &mut stdin) {
+                                    error!("喂入 stdin 失败: {}", e);
+                                    pipe_ok = false;
+                                    if play_state.is_next_requested() {
+                                        play_state.clear_next_request();
+                                        info!("切歌 → 下一首");
+                                        idx += 1;
+                                        let _ = streamer.wait();
+                                        break;
+                                    }
+                                    break 'playback;
+                                }
+                            }
+                            Err(e) => {
+                                error!("打开文件失败: {}: {}", file_path, e);
+                                idx += 1;
+                                continue;
+                            }
+                        }
+                        idx += 1;
                     }
-                    crate::common::play_state::set_stopped();
-                });
-                
-                // 等待播放完成
-                let _ = handle.await;
 
-                // 检查是否因停止请求而退出
-                if crate::common::play_state::is_stop_requested() {
-                    info!("收到停止请求，终止歌单播放");
-                    break;
+                    if pipe_ok {
+                        drop(stdin);
+                    }
+                    let _ = streamer.wait();
+
+                    // 无需重新加入语音频道，stdin pipe 模式下连接复用
                 }
 
-                // 短暂等待
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-            
-            // 检查是否是因停止请求而退出
-            let stopped_by_user = crate::common::play_state::is_stop_requested();
+                play_state.set_stopped();
+                Ok(())
+            }).await;
 
-            // 重置播放状态
-            crate::common::play_state::reset_stats();
-
-            if let Some(client) = api_client.read().await.as_ref() {
-                // 删除最后的卡片
-                if let Some(old_msg_id) = crate::common::play_state::take_play_msg_id() {
-                    let _ = client.delete_message(&old_msg_id).await;
+            // ── 清理 ──
+            let playback_err = match &result {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.clone()),
+                Err(e) => Some(format!("播放线程异常: {}", e)),
+            };
+            if let Some(client) = api_cleanup.read().await.as_ref() {
+                if let Some(old) = ps_cleanup.take_play_msg_id() {
+                    let _ = client.delete_message(&old).await;
                 }
-
-                // 自然播放完成时发送提示（用户主动停止时不发送）
-                if !stopped_by_user {
-                    let msg = format!("✅ 歌单 **{}** 播放完成，感谢收听！", playlist_name);
-                    let _ = client.send_channel_message(&channel_id, &msg).await;
+                if !ps_cleanup.is_stop_requested() {
+                    if let Some(err) = &playback_err {
+                        let _ = client.send_channel_message(&ch_cleanup, &format!("❌ 播放出错: {}", err)).await;
+                    } else {
+                        let _ = client.send_channel_message(&ch_cleanup,
+                            &format!("✅ 歌单 **{}** 播放完成", playlist_name)).await;
+                    }
                 }
+                let _ = client.leave_voice_channel(&vc_cleanup).await;
             }
-
-            // 离开语音频道
-            if let Some(client) = api_client.read().await.as_ref() {
-                let _ = client.leave_voice_channel(&vc_id).await;
-            }
-
+            ps_cleanup.reset_stats();
             info!("歌单播放完成");
         });
 
-        CommandResult::Reply(format!("✅ 歌单开始播放，共 {} 首", total_count))
+        CommandResult::Reply(format!("✅ 歌单开始播放，共 {} 首 (stdin pipe)", total_count))
     }
     
     /// 处理单曲播放
@@ -644,7 +573,7 @@ impl WyyCommand {
                         };
                         
                         // 下载后清理缓存
-                        crate::common::cache::cleanup_cache(&self.cache_dir, self.max_cache_size_mb);
+                        crate::common::cache::cleanup_cache(&self.cache_dir, self.max_cache_size_mb).await;
                         
                         drop(netease); // 释放锁
                         
@@ -665,9 +594,12 @@ impl WyyCommand {
                             
                             let card_json = build_play_card(&card_data);
                             if let Ok(msg_id) = client.send_card_message(channel_id, &card_json).await {
-                                crate::common::play_state::set_play_msg_id(msg_id);
+                                self.play_state.set_play_msg_id(msg_id);
                             }
                         }
+                        
+                        // 记录歌曲时长，用于进度显示
+                        self.play_state.set_current_song_duration(music.duration.unwrap_or(0));
                         
                         // 加入语音频道并播放
                         if let Some((ip, port, streaming_info)) = self.join_voice_for_streaming(ctx, &vc.id, channel_id).await {
@@ -675,13 +607,14 @@ impl WyyCommand {
                             
                             let api_client = ctx.api_client.clone();
                             let vc_id = vc_id_for_leave.clone();
+                            let play_state = self.play_state.clone();
                             
                             tokio::spawn(async move {
                                 let _ = handle.await;
                                 info!("单曲播放完成");
                                 
                                 if let Some(client) = api_client.read().await.as_ref() {
-                                    if let Some(msg_id) = crate::common::play_state::take_play_msg_id() {
+                                    if let Some(msg_id) = play_state.take_play_msg_id() {
                                         let _ = client.delete_message(&msg_id).await;
                                     }
                                     let _ = client.leave_voice_channel(&vc_id).await;
@@ -949,14 +882,264 @@ impl CommandHandler for WyyLoginCommand {
     }
 }
 
+/// Bot 状态命令
+pub struct BotStatusCommand {
+    play_state: Arc<PlayState>,
+    cache_dir: String,
+}
+
+impl BotStatusCommand {
+    pub fn new(play_state: Arc<PlayState>, cache_dir: String) -> Self {
+        Self { play_state, cache_dir }
+    }
+}
+
+#[async_trait]
+impl CommandHandler for BotStatusCommand {
+    fn name(&self) -> &'static str {
+        "状态"
+    }
+    
+    fn aliases(&self) -> Vec<&'static str> {
+        vec!["status", "zt", "bot"]
+    }
+    
+    fn description(&self) -> &'static str {
+        "查看 Bot 当前播放状态和统计信息"
+    }
+    
+    fn usage(&self) -> &'static str {
+        "/状态"
+    }
+    
+    async fn execute(&self, _ctx: CommandContext<'_>) -> CommandResult {
+        let is_playing = self.play_state.is_playing();
+        let play_count = self.play_state.get_play_count();
+        let play_duration = self.play_state.get_play_duration();
+        let cache_size = crate::common::cache::get_cache_size_mb(&self.cache_dir);
+        
+        let duration_str = crate::common::utils::format_duration(play_duration);
+        let cache_str = crate::common::utils::format_bytes(cache_size * 1024 * 1024);
+        
+        let status = if is_playing {
+            let progress = self.play_state.progress_bar()
+                .map(|p| format!("\n⏳ {}\n", p))
+                .unwrap_or_default();
+            format!(
+                "🎵 **Bot 运行状态**\n\n\
+                 ▶️ **正在播放**{}\
+                 📊 本次已播放: {} 首\n\
+                 ⏱️  播放时长: {}\n\
+                 💾 缓存占用: {}\n\
+                 \n---\n\
+                 使用 `/wyy 歌名` 点歌",
+                progress, play_count, duration_str, cache_str
+            )
+        } else {
+            format!(
+                "🎵 **Bot 运行状态**\n\n\
+                 ⏸️ **当前空闲**\n\
+                 📊 本次已播放: {} 首\n\
+                 💾 缓存占用: {}\n\
+                 \n---\n\
+                 使用 `/wyy 歌名` 开始点歌",
+                play_count, cache_str
+            )
+        };
+        
+        CommandResult::Reply(status)
+    }
+}
+
+
+/// 跨平台统一搜索命令
+pub struct UnifiedSearchCommand {
+    netease_client: Arc<RwLock<NeteaseClient>>,
+    qqmusic_client: Arc<RwLock<QQMusicClient>>,
+    bilibili_client: Arc<RwLock<BilibiliClient>>,
+}
+
+impl UnifiedSearchCommand {
+    pub fn new(
+        netease_client: Arc<RwLock<NeteaseClient>>,
+        qqmusic_client: Arc<RwLock<QQMusicClient>>,
+        bilibili_client: Arc<RwLock<BilibiliClient>>,
+    ) -> Self {
+        Self { netease_client, qqmusic_client, bilibili_client }
+    }
+}
+
+#[async_trait]
+impl CommandHandler for UnifiedSearchCommand {
+    fn name(&self) -> &'static str {
+        "搜索"
+    }
+
+    fn aliases(&self) -> Vec<&'static str> {
+        vec!["search", "搜", "s"]
+    }
+
+    fn description(&self) -> &'static str {
+        "跨平台搜索歌曲（网易云 + QQ音乐 + B站）"
+    }
+
+    fn usage(&self) -> &'static str {
+        "/搜索 <关键词>"
+    }
+
+    async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
+        if ctx.args.is_empty() {
+            return CommandResult::Reply("❌ 请提供搜索关键词\n用法: `/搜索 <关键词>`".to_string());
+        }
+
+        let keyword = ctx.args.join(" ");
+        info!("跨平台搜索: {}", keyword);
+
+        // 并行搜索三个平台
+        let (netease_results, qqmusic_results, bilibili_results) = tokio::join!(
+            async {
+                let client = self.netease_client.read().await;
+                client.search(&keyword, 5).await.unwrap_or_default()
+            },
+            async {
+                let client = self.qqmusic_client.read().await;
+                client.search(&keyword, 5).await.unwrap_or_default()
+            },
+            async {
+                let client = self.bilibili_client.read().await;
+                client.search(&keyword, 5).await.unwrap_or_default()
+            }
+        );
+
+        if netease_results.is_empty() && qqmusic_results.is_empty() && bilibili_results.is_empty() {
+            return CommandResult::Reply(format!("🔍 未找到与 **{}** 相关的歌曲", keyword));
+        }
+
+        let mut lines = vec![format!("🔍 **{}** 的搜索结果：", keyword), String::new()];
+
+        if !netease_results.is_empty() {
+            lines.push("**🎵 网易云音乐**".to_string());
+            for (i, song) in netease_results.iter().take(5).enumerate() {
+                lines.push(format!(
+                    "  {}. **{}** - {}  |  `/wyy {}`",
+                    i + 1,
+                    truncate(&song.name, 25),
+                    song.artists.first().map(|a| a.name.as_str()).unwrap_or("未知"),
+                    song.id
+                ));
+            }
+            lines.push(String::new());
+        }
+
+        if !qqmusic_results.is_empty() {
+            lines.push("**🎶 QQ音乐**".to_string());
+            for (i, song) in qqmusic_results.iter().take(5).enumerate() {
+                lines.push(format!(
+                    "  {}. **{}** - {}  |  `/qqmusic {}`",
+                    i + 1,
+                    truncate(&song.name, 25),
+                    song.artists.first().map(|a| a.name.as_str()).unwrap_or("未知"),
+                    song.id
+                ));
+            }
+        }
+
+        if !bilibili_results.is_empty() {
+            lines.push(String::new());
+            lines.push("**📺 B站**".to_string());
+            for (i, song) in bilibili_results.iter().take(5).enumerate() {
+                lines.push(format!(
+                    "  {}. **{}** - {}  |  `/bilibili {}`",
+                    i + 1,
+                    truncate(&song.name, 25),
+                    song.author.name,
+                    song.bvid
+                ));
+            }
+        }
+
+        CommandResult::Reply(lines.join("\n"))
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() > max {
+        format!("{}...", chars.iter().take(max).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// 歌词查询命令
+pub struct LyricCommand {
+    netease_client: Arc<RwLock<NeteaseClient>>,
+}
+
+impl LyricCommand {
+    pub fn new(netease_client: Arc<RwLock<NeteaseClient>>) -> Self {
+        Self { netease_client }
+    }
+}
+
+#[async_trait]
+impl CommandHandler for LyricCommand {
+    fn name(&self) -> &'static str {
+        "歌词"
+    }
+
+    fn aliases(&self) -> Vec<&'static str> {
+        vec!["lyric", "lrc", "gc"]
+    }
+
+    fn description(&self) -> &'static str {
+        "查询歌曲歌词"
+    }
+
+    fn usage(&self) -> &'static str {
+        "/歌词 <歌曲ID>"
+    }
+
+    async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
+        if ctx.args.is_empty() {
+            return CommandResult::Reply("❌ 请提供歌曲ID\n用法: `/歌词 <歌曲ID>`".to_string());
+        }
+
+        let song_id: u64 = match ctx.args[0].parse() {
+            Ok(id) => id,
+            Err(_) => return CommandResult::Reply("❌ 无效的歌曲ID".to_string()),
+        };
+
+        let client = self.netease_client.read().await;
+        match client.get_lyric(song_id).await {
+            Ok(Some(lyric)) => {
+                // 取前20行
+                let lines: Vec<&str> = lyric.lines().take(20).collect();
+                if lines.is_empty() {
+                    return CommandResult::Reply("📝 暂无歌词".to_string());
+                }
+                CommandResult::Reply(format!("📝 **歌词** (ID: {})\n\n{}", song_id, lines.join("\n")))
+            }
+            Ok(None) => CommandResult::Reply("📝 暂无歌词".to_string()),
+            Err(e) => CommandResult::Error(format!("获取歌词失败: {}", e)),
+        }
+    }
+}
 /// 创建音乐模块的所有命令
 pub fn create_music_commands(
     netease_client: Arc<RwLock<NeteaseClient>>,
     config: BotConfig,
+    play_state: Arc<PlayState>,
 ) -> Vec<Arc<dyn CommandHandler>> {
     vec![
+        Arc::new(BotStatusCommand::new(
+            play_state.clone(),
+            config.music.cache_dir.clone(),
+        )),
+        Arc::new(LyricCommand::new(netease_client.clone())),
         Arc::new(WyyCommand::new(
             netease_client.clone(), 
+            play_state.clone(),
             config.music.cache_dir.clone(),
             config.music.max_cache_size_mb,
         )),

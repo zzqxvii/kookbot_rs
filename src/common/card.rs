@@ -383,3 +383,71 @@ fn truncate_text(text: &str, max_len: usize) -> String {
         chars[..max_len].iter().collect::<String>() + "..."
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_play_card_has_modules() {
+        let data = PlayCardData {
+            current: PlayMusic {
+                title: "测试歌曲".into(),
+                author: "测试歌手".into(),
+                platform: "netease".into(),
+                pic_url: String::new(),
+                sender: Sender {
+                    nick_name: "点歌用户".into(),
+                    avatar_url: None,
+                },
+            },
+            queue: vec![],
+            queue_total: 1,
+        };
+
+        let card = build_play_card(&data);
+
+        // Verify outer shape is an array with one card
+        let arr = card.as_array().expect("should be an array");
+        assert_eq!(arr.len(), 1);
+
+        let card_obj = &arr[0];
+        assert_eq!(card_obj["type"], "card");
+        assert!(card_obj["modules"].is_array());
+
+        // Verify modules contains at least the header and current song
+        let modules = card_obj["modules"].as_array().unwrap();
+        assert!(modules.len() >= 2);
+    }
+
+    #[test]
+    fn test_build_search_card_truncation() {
+        // Truncation in build_search_card: long titles still pass through
+        // (build_search_card does not call truncate_text itself, but we
+        // verify it handles long inputs without panic and the content is preserved)
+        let long_title = "a".repeat(100);
+        let long_author = "b".repeat(100);
+        let results = vec![(long_title.clone(), long_author, String::new())];
+
+        let card = build_search_card("test", &results, "netease", "user", "avatar");
+
+        let arr = card.as_array().unwrap();
+        let card_obj = &arr[0];
+        assert_eq!(card_obj["type"], "card");
+
+        // The long text should appear in the kmarkdown content
+        let modules = card_obj["modules"].as_array().unwrap();
+        // Module 1 (index 1) is the search result section
+        let result_section = &modules[1];
+        let content = result_section["text"]["content"].as_str().unwrap();
+        assert!(content.contains(&long_title));
+
+        // Also test truncate_text directly (used by build_play_card)
+        let truncated = truncate_text("hello world this is a long string", 10);
+        assert_eq!(truncated.len(), 13); // 10 chars + "..."
+        assert!(truncated.ends_with("..."));
+
+        let short = truncate_text("hi", 10);
+        assert_eq!(short, "hi");
+    }
+}

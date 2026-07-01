@@ -1,3 +1,4 @@
+use crate::common::play_state::PlayState;
 use crate::audio::decoder::AudioDecoder;
 use crate::audio::ffmpeg_encoder::FFmpegOpusEncoder;
 use crate::audio::ffmpeg_streamer::{FFmpegDirectStreamer, StreamerConfig};
@@ -25,14 +26,16 @@ pub struct AudioStreamer {
     running: Arc<AtomicBool>,
     /// 流信息
     streaming_info: VoiceStreamingInfo,
+    /// 播放状态
+    play_state: Arc<PlayState>,
 }
-
 impl AudioStreamer {
     /// 创建新的音频流处理器
     pub fn new(
         streaming_info: &VoiceStreamingInfo,
         _audio_config: AudioConfig,
         _network_config: NetworkConfig,
+        play_state: Arc<PlayState>,
     ) -> Result<Self> {
         // 构建目标地址
         let dest_addr = format!("{}:{}", streaming_info.ip, streaming_info.port);
@@ -72,6 +75,7 @@ impl AudioStreamer {
             direct_streamer: None,
             running: Arc::new(AtomicBool::new(false)),
             streaming_info: streaming_info.clone(),
+            play_state,
         })
     }
 
@@ -173,7 +177,7 @@ impl AudioStreamer {
         
         if self.direct_streamer.is_none() {
             let config = StreamerConfig::from(&self.streaming_info);
-            self.direct_streamer = Some(FFmpegDirectStreamer::new(config)?);
+            self.direct_streamer = Some(FFmpegDirectStreamer::new(config, self.play_state.clone())?);
         }
         
         let streamer = self.direct_streamer.as_mut().unwrap();

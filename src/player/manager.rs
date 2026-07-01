@@ -1,5 +1,6 @@
 use crate::api::client::KookClient;
 use crate::audio::streamer::AudioStreamer;
+use crate::common::play_state::PlayState;
 use crate::core::config::BotConfig;
 use crate::core::error::{BotError, Result};
 use super::VoiceStreamingInfo;
@@ -18,11 +19,13 @@ pub struct VoiceManager {
     current_channel: Option<String>,
     /// 音频流处理器
     audio_streamer: Option<Arc<Mutex<AudioStreamer>>>,
+    /// 播放状态
+    play_state: Arc<PlayState>,
 }
 
 impl VoiceManager {
     /// 创建新的语音管理器
-    pub async fn new(config: &BotConfig) -> Result<Self> {
+    pub async fn new(config: &BotConfig, play_state: Arc<PlayState>) -> Result<Self> {
         let kook_client = KookClient::new(config)?;
 
         info!("语音管理器创建成功");
@@ -32,6 +35,7 @@ impl VoiceManager {
             config: config.clone(),
             current_channel: None,
             audio_streamer: None,
+            play_state,
         })
     }
 
@@ -82,14 +86,15 @@ impl VoiceManager {
             ssrc,
             pt,
             bit_rate,
-            sample_rate: 48000, // Kook 使用 48kHz
-            channels: 2,        // 立体声
+            sample_rate: 48000,
+            channels: 2,
         };
 
         let audio_streamer = AudioStreamer::new(
             &streaming_info,
             self.config.audio.clone(),
             self.config.network.clone(),
+            self.play_state.clone(),
         )?;
 
         self.audio_streamer = Some(Arc::new(Mutex::new(audio_streamer)));
@@ -101,14 +106,12 @@ impl VoiceManager {
 
     /// 离开语音频道
     pub async fn leave_channel(&mut self) -> Result<()> {
-        // 停止音频流
         if let Some(ref streamer) = self.audio_streamer {
             let mut streamer = streamer.lock().await;
             streamer.stop();
         }
         self.audio_streamer = None;
 
-        // 如果当前在频道中，调用 API 离开
         if let Some(ref channel_id) = self.current_channel {
             info!("正在离开语音频道: {}", channel_id);
             if let Err(e) = self.kook_client.leave_voice_channel(channel_id).await {
@@ -125,12 +128,10 @@ impl VoiceManager {
     pub async fn play_file(&mut self, file_path: impl AsRef<Path>) -> Result<()> {
         let file_path = file_path.as_ref();
 
-        // 确保已经在语音频道
         if self.current_channel.is_none() {
             return Err(BotError::NotInVoiceChannel);
         }
 
-        // 确保有音频流处理器
         let streamer = self
             .audio_streamer
             .as_ref()
@@ -138,7 +139,6 @@ impl VoiceManager {
 
         info!("开始播放文件: {:?}", file_path);
 
-        // 在后台任务中播放音频
         let streamer_clone = Arc::clone(streamer);
         let file_path = file_path.to_path_buf();
 

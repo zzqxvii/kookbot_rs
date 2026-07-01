@@ -9,7 +9,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
     Router,
 };
 use std::sync::Arc;
@@ -35,12 +35,14 @@ impl WebhookServer {
 
         let app = Router::new()
             .route(&self.config.path, post(handle_webhook))
+            .route("/health", get(health_check))
             .with_state(Arc::new(self));
 
         let listener = TcpListener::bind(&addr).await
             .map_err(|e| BotError::NetworkError(format!("无法绑定地址 {}: {}", addr, e)))?;
 
         info!("Webhook 服务器已启动，监听: {}", addr);
+        info!("健康检查: http://{}/health", addr);
 
         axum::serve(listener, app).await
             .map_err(|e| BotError::NetworkError(format!("服务器错误: {}", e)))?;
@@ -77,6 +79,14 @@ async fn handle_webhook(
 
     // 返回 200 OK
     (StatusCode::OK, "OK")
+}
+
+/// 健康检查端点
+async fn health_check() -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "service": "kook-music-bot"
+    }))
 }
 
 /// 验证请求签名

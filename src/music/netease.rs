@@ -90,7 +90,7 @@ impl NeteaseClient {
     }
     
     pub fn has_cookie(&self) -> bool {
-        self.cookie.is_some()
+        self.cookie.as_deref().map_or(false, |c| !c.is_empty())
     }
     
     /// 检查 API 是否可用
@@ -661,5 +661,32 @@ impl NeteaseClient {
             duration: Some(song.duration / 1000),
             sender: Sender::default(),
         }
+    }
+
+    /// 获取歌词
+    pub async fn get_lyric(&self, song_id: u64) -> Result<Option<String>> {
+        let url = format!("{}/lyric", self.base_url);
+
+        #[derive(Deserialize)]
+        struct LyricData {
+            code: i32,
+            lrc: Option<LyricContent>,
+        }
+        #[derive(Deserialize)]
+        struct LyricContent {
+            lyric: Option<String>,
+        }
+
+        let response = self.http
+            .get(&url)
+            .query(&[("id", song_id.to_string())])
+            .send()
+            .await?;
+
+        let data: LyricData = response.json().await?;
+        if data.code != 200 {
+            return Ok(None);
+        }
+        Ok(data.lrc.and_then(|l| l.lyric))
     }
 }

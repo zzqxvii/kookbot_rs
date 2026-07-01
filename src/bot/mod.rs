@@ -13,22 +13,28 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::api::KookClient;
-use crate::common::play_state;
+use crate::common::play_state::PlayState;
 use crate::core::config::BotConfig;
 use crate::gateway::{
     ButtonClickData, EventHandler, MessageData, ReactionEventData, SystemMessageData,
     VoiceChannelEventData,
 };
 use crate::music::NeteaseClient;
+use crate::music::QQMusicClient;
+use crate::music::BilibiliClient;
 use crate::player::VoiceManager;
 use async_trait::async_trait;
 use serde_json::Value;
 
 pub mod commands;
 pub mod music;
+pub mod qqmusic;
+pub mod bilibili;
 
 use commands::{CommandResult, CommandRouter};
-use music::{create_music_commands, HelpCommand, JoinCommand, LeaveCommand};
+use music::{create_music_commands, HelpCommand, JoinCommand, LeaveCommand, UnifiedSearchCommand};
+use qqmusic::create_qqmusic_commands;
+use bilibili::create_bilibili_commands;
 
 /// Bot 核心结构体
 pub struct Bot {
@@ -38,6 +44,8 @@ pub struct Bot {
     api_client: Arc<RwLock<Option<KookClient>>>,
     /// 命令路由器
     command_router: CommandRouter,
+    /// 播放状态
+    play_state: Arc<PlayState>,
     /// 网易云客户端
     netease_client: Arc<RwLock<NeteaseClient>>,
     /// 语音管理器
@@ -49,8 +57,8 @@ impl Bot {
     pub fn new(config: BotConfig, api_client: KookClient) -> Self {
         // 清理 cookie 格式
         let netease_cookie = config.music.netease_cookie.as_ref()
-            .map(|c| Self::clean_cookie(c));
-        
+            .map(|c| Self::clean_cookie(c))
+            .filter(|c| !c.is_empty());
         let netease_client = NeteaseClient::with_cookie(
             &config.music.netease_api_url,
             netease_cookie,
@@ -61,29 +69,76 @@ impl Bot {
         } else {
             info!("未配置网易云登录凭证，可能只能播放试听版本");
         }
-        
+
+        // 创建 QQ 音乐客户端
+        let qqmusic_cookie = config.music.qqmusic_cookie.as_ref()
+            .map(|c| Self::clean_cookie(c))
+            .filter(|c| !c.is_empty());
+        let qqmusic_client = QQMusicClient::with_cookie(
+            &config.music.qqmusic_api_url,
+            qqmusic_cookie,
+        );
+
+        if qqmusic_client.has_cookie() {
+            info!("已加载QQ音乐登录凭证");
+        } else {
+            info!("未配置QQ音乐登录凭证，可能只能播放试听版本");
+        }
+
+        // 创建 B站客户端
+        let bilibili_cookie = config.music.bilibili_cookie.as_ref()
+            .map(|c| Self::clean_cookie(c))
+            .filter(|c| !c.is_empty());
+        let bilibili_client = BilibiliClient::with_cookie(
+            &config.music.bilibili_api_url,
+            bilibili_cookie,
+        );
+
+        if bilibili_client.has_cookie() {
+            info!("已加载B站登录凭证");
+        } else {
+            info!("未配置B站登录凭证，可能只能播放试听版本");
+        }
+
         let mut command_router = CommandRouter::new(&config.prefix);
-        
+
         // 注册基础命令
         command_router.register(Arc::new(HelpCommand));
         command_router.register(Arc::new(JoinCommand));
         command_router.register(Arc::new(LeaveCommand));
-        
         // 注册音乐模块命令
+        let play_state = Arc::new(PlayState::new());
         let netease_client_arc = Arc::new(RwLock::new(netease_client));
-        for cmd in create_music_commands(netease_client_arc.clone(), config.clone()) {
+        for cmd in create_music_commands(netease_client_arc.clone(), config.clone(), play_state.clone()) {
             command_router.register(cmd);
         }
-        
+        // 注册 QQ 音乐命令
+        let qqmusic_client_arc = Arc::new(RwLock::new(qqmusic_client));
+        for cmd in create_qqmusic_commands(qqmusic_client_arc.clone(), &config, play_state.clone()) {
+            command_router.register(cmd);
+        }
+        // 注册 B站命令
+        let bilibili_client_arc = Arc::new(RwLock::new(bilibili_client));
+        for cmd in create_bilibili_commands(bilibili_client_arc.clone(), &config, play_state.clone()) {
+            command_router.register(cmd);
+        }
+        // 注册跨平台搜索命令
+        command_router.register(Arc::new(UnifiedSearchCommand::new(
+            netease_client_arc.clone(),
+            qqmusic_client_arc.clone(),
+            bilibili_client_arc.clone(),
+        )));
+
         Self {
             config,
             api_client: Arc::new(RwLock::new(Some(api_client))),
             command_router,
+            play_state,
             netease_client: netease_client_arc,
             voice_manager: Arc::new(Mutex::new(None)),
         }
     }
-    
+
     /// 清理 cookie 字符串
     fn clean_cookie(raw: &str) -> String {
         raw.split(';')
@@ -111,12 +166,11 @@ impl Bot {
         info!("  作者: {} (ID: {})", data.extra.author.nickname, data.author_id);
         info!("  内容: {}", data.content);
         info!("  频道: {}", data.target_id);
-        
-        // 使用命令路由器处理
         if let Some(result) = self.command_router.handle_message(
             data,
             self.api_client.clone(),
             &self.config,
+            &self.play_state,
             self.netease_client.clone(),
             self.voice_manager.clone(),
         ).await {
@@ -205,14 +259,29 @@ impl EventHandler for BotEventHandler {
             user_id.clone()
         };
         
+        // 管理员权限检查（仅当配置了管理员列表时）
+        if !self.bot.config.admins.is_empty()
+            && !self.bot.config.is_admin(user_id)
+            && (value == "stop" || value == "nextMusic")
+        {
+            info!("[Bot] 非管理员用户 {} 尝试执行 {}", user_id, value);
+            if let Some(client) = self.bot.api_client.read().await.as_ref() {
+                let _ = client.send_channel_message(
+                    channel_id,
+                    "⚠️ 仅管理员可执行此操作"
+                ).await;
+            }
+            return;
+        }
+
         match value.as_str() {
             "nextMusic" => {
-                info!("[Bot] 处理下一首请求, is_playing={}", play_state::is_playing());
-                info!("[Bot] 当前 PID: {}", play_state::get_pid());
+                info!("[Bot] 处理下一首请求, is_playing={}", self.bot.play_state.is_playing());
+                info!("[Bot] 当前 PID: {}", self.bot.play_state.get_pid());
                 
-                if play_state::is_playing() {
-                    play_state::request_next();
-                    let killed = play_state::kill_process();
+                if self.bot.play_state.is_playing() {
+                    self.bot.play_state.request_next();
+                    let killed = self.bot.play_state.kill_process();
                     info!("[Bot] 进程已终止: {}", killed);
                     
                     if let Some(client) = self.bot.api_client.read().await.as_ref() {
@@ -232,24 +301,24 @@ impl EventHandler for BotEventHandler {
                 }
             }
             "stop" => {
-                info!("[Bot] 处理停止请求, is_playing={}", play_state::is_playing());
-                info!("[Bot] 当前 PID: {}", play_state::get_pid());
+                info!("[Bot] 处理停止请求, is_playing={}", self.bot.play_state.is_playing());
+                info!("[Bot] 当前 PID: {}", self.bot.play_state.get_pid());
 
-                if play_state::is_playing() {
-                    play_state::request_stop();
-                    let killed = play_state::kill_process();
+                if self.bot.play_state.is_playing() {
+                    self.bot.play_state.request_stop();
+                    let killed = self.bot.play_state.kill_process();
                     info!("[Bot] 进程已终止: {}", killed);
 
                     // 删除播放卡片
                     if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        if let Some(old_msg_id) = play_state::take_play_msg_id() {
+                        if let Some(old_msg_id) = self.bot.play_state.take_play_msg_id() {
                             let _ = client.delete_message(&old_msg_id).await;
                         }
                     }
 
                     // 离开语音频道
                     let mut vm = self.bot.voice_manager.lock().await;
-                    if let Some(ref mut voice_manager) = *vm {
+                    if let Some(voice_manager) = vm.as_mut() {
                         let _ = voice_manager.leave_channel().await;
                         *vm = None;
                     }

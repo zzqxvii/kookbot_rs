@@ -338,15 +338,106 @@ mod tests {
             playlist.add(music);
         }
 
+        // 先调用 next() 锚定 current_position
+        playlist.next();
+
         // 切换到随机模式
         playlist.set_mode(PlayMode::Shuffle);
 
-        // 播放几首
-        for _ in 0..5 {
+        // 播放剩余的
+        for _ in 0..4 {
             playlist.next();
         }
 
         // 验证歌曲都被播放了（不验证顺序，因为是随机的）
         assert!(playlist.current_position().is_some());
+    }
+
+    #[test]
+    fn test_sequential_loop() {
+        let mut playlist = Playlist::new("test");
+        playlist.add(make_music("song1", "artist1"));
+        playlist.add(make_music("song2", "artist2"));
+        playlist.add(make_music("song3", "artist3"));
+
+        assert_eq!(playlist.next().unwrap().title, "song1");
+        assert_eq!(playlist.next().unwrap().title, "song2");
+        assert_eq!(playlist.next().unwrap().title, "song3");
+        assert!(playlist.next().is_none());
+    }
+
+    #[test]
+    fn test_repeat_one() {
+        let mut playlist = Playlist::new("test");
+        playlist.add(make_music("song1", "artist1"));
+        playlist.add(make_music("song2", "artist2"));
+
+        playlist.set_mode(PlayMode::RepeatOne);
+
+        // First call sets position to 0 and returns song1
+        let first = playlist.next().unwrap();
+        assert_eq!(first.title, "song1");
+
+        // RepeatOne always returns the current song
+        let second = playlist.next().unwrap();
+        assert_eq!(second.title, "song1");
+
+        let third = playlist.next().unwrap();
+        assert_eq!(third.title, "song1");
+    }
+
+    #[test]
+    fn test_repeat_all() {
+        let mut playlist = Playlist::new("test");
+        playlist.add(make_music("song1", "artist1"));
+        playlist.add(make_music("song2", "artist2"));
+        playlist.add(make_music("song3", "artist3"));
+
+        playlist.set_mode(PlayMode::RepeatAll);
+
+        assert_eq!(playlist.next().unwrap().title, "song1");
+        assert_eq!(playlist.next().unwrap().title, "song2");
+        assert_eq!(playlist.next().unwrap().title, "song3");
+        // Wraps around to song1
+        assert_eq!(playlist.next().unwrap().title, "song1");
+        // Continues to song2
+        assert_eq!(playlist.next().unwrap().title, "song2");
+    }
+
+    #[test]
+    fn test_shuffle_contains_all() {
+        let mut playlist = Playlist::new("test");
+        for i in 0..10 {
+            playlist.add(make_music(&format!("song{}", i), "artist"));
+        }
+
+        playlist.set_mode(PlayMode::Shuffle);
+
+        // Collect songs by calling next() len times (shuffle wraps, so no None)
+        let mut played = std::collections::HashSet::new();
+        for _ in 0..playlist.len() {
+            let music = playlist.next().unwrap();
+            played.insert(music.title.clone());
+        }
+
+        // All 10 songs should have been played
+        assert_eq!(played.len(), 10);
+        for i in 0..10 {
+            assert!(played.contains(&format!("song{}", i)));
+        }
+    }
+
+    #[test]
+    fn test_empty_next() {
+        let mut playlist = Playlist::new("test");
+        assert!(playlist.next().is_none());
+    }
+
+    fn make_music(title: &str, author: &str) -> Music {
+        Music {
+            title: title.into(),
+            author: author.into(),
+            ..Default::default()
+        }
     }
 }

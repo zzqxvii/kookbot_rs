@@ -14,6 +14,10 @@ mode = "websocket"
 
 # 命令前缀 (默认: /)
 prefix = "/"
+# 管理员用户ID列表 (为空则所有人可操作按钮)
+# 从 Kook 用户信息中获取，多个用逗号分隔
+# admins = ["user_id_1", "user_id_2"]
+
 
 # ============================================
 # Webhook 模式配置 (仅 webhook 模式需要)
@@ -70,6 +74,19 @@ netease_api_url = "http://localhost:3000"
 
 # 网易云音乐 Cookie (如果需要登录获取更多歌曲信息或下载受限歌曲)
 netease_cookie = ""
+
+# QQ 音乐 API 地址 (必需)
+# 使用 QQMusicApi 项目: https://github.com/jsososo/QQMusicApi
+qqmusic_api_url = "http://localhost:3300"
+# QQ 音乐 Cookie (如果需要登录获取更多歌曲信息)
+qqmusic_cookie = ""
+
+# B站 API 地址 (必需)
+# 使用 BilibiliMusicApi 项目
+bilibili_api_url = "http://localhost:3400"
+
+# B站 Cookie (如果需要登录获取更多歌曲信息)
+bilibili_cookie = ""
 
 # ============================================
 # 播放器配置

@@ -1,4 +1,4 @@
-use crate::common::play_state;
+use crate::common::play_state::PlayState;
 use crate::core::error::{BotError, Result};
 use crate::player::VoiceStreamingInfo;
 use std::io::{BufRead, BufReader};
@@ -15,6 +15,11 @@ pub struct FFmpegDirectStreamer {
     config: StreamerConfig,
     process: Option<Child>,
     running: Arc<AtomicBool>,
+    play_state: Arc<PlayState>,
+    /// concat 播放列表临时文件 (wait 后清理)
+    concat_file: Option<std::path::PathBuf>,
+    /// stderr 读取线程句柄 (stop 时 join)
+    stderr_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,20 +44,21 @@ impl From<&VoiceStreamingInfo> for StreamerConfig {
         }
     }
 }
-
 impl FFmpegDirectStreamer {
-    pub fn new(config: StreamerConfig) -> Result<Self> {
+    pub fn new(config: StreamerConfig, play_state: Arc<PlayState>) -> Result<Self> {
         Self::check_ffmpeg()?;
 
         info!(
             "FFmpeg 直接推流器创建成功: SSRC={}, PT={}, {}bps",
             config.ssrc, config.pt, config.bit_rate
         );
-
         Ok(Self {
             config,
             process: None,
             running: Arc::new(AtomicBool::new(false)),
+            play_state,
+            concat_file: None,
+            stderr_threads: Vec::new(),
         })
     }
 
@@ -142,13 +148,13 @@ impl FFmpegDirectStreamer {
 
         let pid = child.id();
         info!("FFmpeg 进程已启动 (PID: {:?})", pid);
-        play_state::set_playing(pid);
+        self.play_state.set_playing(pid);
 
         let stderr = child.stderr.take().expect("stderr should be piped");
         let running = self.running.clone();
         running.store(true, Ordering::SeqCst);
 
-        std::thread::spawn(move || {
+        let stderr_handle = std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 if !running.load(Ordering::SeqCst) {
@@ -166,6 +172,193 @@ impl FFmpegDirectStreamer {
                 }
             }
         });
+        self.stderr_threads.push(stderr_handle);
+
+        self.process = Some(child);
+        Ok(())
+    }
+
+    /// 从 stdin 推流 (pipe 模式)
+    ///
+    /// FFmpeg 从 stdin 读取 MP3 数据，持续编码并推流。
+    /// 调用者按顺序向 stdin 写入音频文件，FFmpeg 无缝衔接。
+    /// stdin 关闭时 FFmpeg 自然退出。
+    ///
+    /// 返回 stdin 写入端，供调用者逐首喂入歌曲数据。
+    pub fn start_stream_stdin(
+        &mut self,
+        dest_ip: &str,
+        dest_port: u16,
+        rtcp_port: u16,
+    ) -> Result<std::process::ChildStdin> {
+        if self.running.load(Ordering::SeqCst) {
+            self.stop();
+        }
+
+        let rtp_url = format!("rtp://{}:{}?rtcpport={}", dest_ip, dest_port, rtcp_port);
+        let bit_rate_k = self.config.bit_rate / 1000;
+        let volume = self.config.volume;
+        let ssrc = self.config.ssrc;
+        let pt = self.config.pt;
+
+        info!("🎵 开始 stdin pipe 推流");
+
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-re",
+                "-loglevel", "warning",
+                "-hide_banner",
+                "-f", "mp3",
+                "-i", "pipe:0",
+                "-map", "0:a:0",
+                "-acodec", "libopus",
+                "-b:a", &format!("{}k", bit_rate_k),
+                "-vbr", "on",
+                "-compression_level", "10",
+                "-filter:a", &format!("volume={}", volume),
+                "-ac", "2",
+                "-ar", "48000",
+                "-f", "tee",
+                &format!(
+                    "[select=a:f=rtp:ssrc={}:payload_type={}]{}",
+                    ssrc, pt, rtp_url
+                ),
+            ])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| BotError::IoError(e))?;
+
+        let pid = child.id();
+        info!("FFmpeg stdin 进程已启动 (PID: {:?})", pid);
+        self.play_state.set_playing(pid);
+
+        let stderr = child.stderr.take().expect("stderr should be piped");
+        let running = self.running.clone();
+        running.store(true, Ordering::SeqCst);
+
+        let stderr_handle = std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Ok(line) = line {
+                    let line_lower = line.to_lowercase();
+                    if line_lower.contains("error") {
+                        error!("[FFmpeg] {}", line);
+                    } else if line_lower.contains("warning") {
+                        warn!("[FFmpeg] {}", line);
+                    }
+                }
+            }
+        });
+        self.stderr_threads.push(stderr_handle);
+
+        let stdin = child.stdin.take().expect("stdin should be piped");
+        self.process = Some(child);
+        Ok(stdin)
+    }
+    /// 从文件列表开始推流 (concat demuxer 模式)
+    ///
+    /// 使用 FFmpeg concat demuxer 顺序播放多个音频文件。
+    /// 播放列表文件在 wait() 返回后自动清理。
+    pub fn start_stream_files(
+        &mut self,
+        file_paths: &[String],
+        dest_ip: &str,
+        dest_port: u16,
+        rtcp_port: u16,
+    ) -> Result<()> {
+        if self.running.load(Ordering::SeqCst) {
+            self.stop();
+        }
+
+        if file_paths.is_empty() {
+            return Err(BotError::ConfigError("文件列表为空".into()));
+        }
+
+        // 创建 concat 播放列表文件 (cache 目录，时间戳唯一命名)
+        let concat_path = std::env::temp_dir()
+            .join(format!("kook_concat_{}.txt", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)));
+
+        let mut f = std::fs::File::create(&concat_path)
+            .map_err(|e| BotError::IoError(e))?;
+        use std::io::Write;
+        for path in file_paths {
+            let normalized = path.replace('\\', "/");
+            writeln!(f, "file '{}'", normalized)
+                .map_err(|e| BotError::IoError(e))?;
+        }
+        f.flush().map_err(|e| BotError::IoError(e))?;
+        drop(f);
+        // 先保存 concat 路径以确保 spawn 失败时也能在 stop()/Drop 中清理
+        self.concat_file = Some(concat_path.clone());
+
+        let rtp_url = format!("rtp://{}:{}?rtcpport={}", dest_ip, dest_port, rtcp_port);
+        let bit_rate_k = self.config.bit_rate / 1000;
+        let volume = self.config.volume;
+        let ssrc = self.config.ssrc;
+        let pt = self.config.pt;
+
+        info!("🎵 开始 concat 播放: {} 个文件", file_paths.len());
+        debug!("Concat 文件: {:?}", concat_path);
+
+
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-re",
+                "-loglevel", "warning",
+                "-hide_banner",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", &concat_path.to_string_lossy(),
+                "-map", "0:a:0",
+                "-acodec", "libopus",
+                "-b:a", &format!("{}k", bit_rate_k),
+                "-vbr", "on",
+                "-compression_level", "10",
+                "-filter:a", &format!("volume={}", volume),
+                "-ac", "2",
+                "-ar", "48000",
+                "-f", "tee",
+                &format!(
+                    "[select=a:f=rtp:ssrc={}:payload_type={}]{}",
+                    ssrc, pt, rtp_url
+                ),
+            ])
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| BotError::IoError(e))?;
+
+        let pid = child.id();
+        info!("FFmpeg concat 进程已启动 (PID: {:?})", pid);
+        self.play_state.set_playing(pid);
+
+        let stderr = child.stderr.take().expect("stderr should be piped");
+        let running = self.running.clone();
+        running.store(true, Ordering::SeqCst);
+
+        let stderr_handle = std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Ok(line) = line {
+                    let line_lower = line.to_lowercase();
+                    if line_lower.contains("error") {
+                        error!("[FFmpeg] {}", line);
+                    } else if line_lower.contains("warning") {
+                        warn!("[FFmpeg] {}", line);
+                    }
+                }
+            }
+        });
+        self.stderr_threads.push(stderr_handle);
 
         self.process = Some(child);
         Ok(())
@@ -177,16 +370,29 @@ impl FFmpegDirectStreamer {
         if let Some(mut child) = self.process.take() {
             let _ = child.kill();
             let _ = child.wait();
-            play_state::set_stopped();
+            self.play_state.set_stopped();
             info!("⏹️ 播放已停止");
+        }
+        // 等待所有 stderr 读取线程结束
+        for handle in self.stderr_threads.drain(..) {
+            let _ = handle.join();
+        }
+        // 清理 concat 临时文件
+        if let Some(path) = self.concat_file.take() {
+            let _ = std::fs::remove_file(&path);
         }
     }
 
-    /// 等待推流结束
+    /// 等待推流结束 (自动清理 concat 播放列表文件)
     pub fn wait(&mut self) -> Result<()> {
-        if let Some(ref mut child) = self.process {
+        if let Some(child) = &mut self.process {
             let _ = child.wait().map_err(|e| BotError::IoError(e))?;
             self.running.store(false, Ordering::SeqCst);
+        }
+        // 清理 concat 临时文件
+        if let Some(path) = self.concat_file.take() {
+            let _ = std::fs::remove_file(&path);
+            debug!("已清理 concat 文件: {:?}", path);
         }
         Ok(())
     }

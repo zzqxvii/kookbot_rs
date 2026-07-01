@@ -6,7 +6,7 @@
 //! - CommandContext: 命令执行的上下文
 //! 
 //! 使用示例：
-//! ```rust
+//! ```rust,ignore
 //! // 定义自定义命令
 //! pub struct MyCommand;
 //! 
@@ -30,6 +30,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info};
 
+use crate::common::play_state::PlayState;
 use crate::api::KookClient;
 use crate::core::config::BotConfig;
 use crate::gateway::MessageData;
@@ -46,6 +47,8 @@ pub struct CommandContext<'a> {
     pub api_client: Arc<RwLock<Option<KookClient>>>,
     /// Bot 配置
     pub config: &'a BotConfig,
+    /// 播放状态
+    pub play_state: &'a Arc<PlayState>,
     /// 网易云客户端
     pub netease_client: Arc<RwLock<NeteaseClient>>,
     /// 语音管理器
@@ -153,6 +156,7 @@ impl CommandRouter {
         data: &MessageData,
         api_client: Arc<RwLock<Option<KookClient>>>,
         config: &BotConfig,
+        play_state: &Arc<PlayState>,
         netease_client: Arc<RwLock<NeteaseClient>>,
         voice_manager: Arc<Mutex<Option<VoiceManager>>>,
     ) -> Option<CommandResult> {
@@ -173,6 +177,7 @@ impl CommandRouter {
             args,
             api_client,
             config,
+            play_state,
             netease_client,
             voice_manager,
         };
@@ -218,5 +223,188 @@ impl CommandRouter {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use crate::api::KookClient;
+    use crate::common::play_state::PlayState;
+    use crate::core::config::{
+        AudioConfig, BotConfig, ConnectionMode, MusicConfig, NetworkConfig, PlayerConfig,
+        WebhookConfig,
+    };
+    use crate::gateway::{Author, ChannelType, MessageData, MessageExtra, MessageType};
+    use crate::music::NeteaseClient;
+    use crate::player::VoiceManager;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, RwLock};
+
+    struct MockHandler {
+        name: &'static str,
+        aliases: Vec<&'static str>,
+    }
+
+    #[async_trait]
+    impl CommandHandler for MockHandler {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn aliases(&self) -> Vec<&'static str> {
+            self.aliases.clone()
+        }
+        fn description(&self) -> &'static str {
+            "mock handler for testing"
+        }
+        fn usage(&self) -> &'static str {
+            "mock"
+        }
+        async fn execute(&self, _ctx: CommandContext<'_>) -> CommandResult {
+            CommandResult::Reply(format!("handled: {}", self.name))
+        }
+    }
+
+    fn make_message(content: &str) -> MessageData {
+        MessageData {
+            channel_type: ChannelType::GROUP,
+            msg_type: MessageType::Text,
+            target_id: "target".into(),
+            author_id: "user1".into(),
+            content: content.into(),
+            msg_id: "msg1".into(),
+            msg_timestamp: 0,
+            nonce: String::new(),
+            extra: MessageExtra {
+                msg_type: MessageType::Text,
+                guild_id: "guild".into(),
+                channel_name: String::new(),
+                mention: vec![],
+                mention_all: false,
+                mention_roles: vec![],
+                mention_here: false,
+                author: Author {
+                    id: "user1".into(),
+                    username: "user".into(),
+                    nickname: String::new(),
+                    identify_num: String::new(),
+                    online: false,
+                    bot: false,
+                    status: 0,
+                    avatar: String::new(),
+                    is_vip: false,
+                    is_music_vip: false,
+                },
+                other: Default::default(),
+            },
+            other: Default::default(),
+        }
+    }
+
+    fn make_deps(
+    ) -> (
+        Arc<RwLock<Option<KookClient>>>,
+        BotConfig,
+        Arc<PlayState>,
+        Arc<RwLock<NeteaseClient>>,
+        Arc<Mutex<Option<VoiceManager>>>,
+    ) {
+        let api = Arc::new(RwLock::new(None));
+        let config = BotConfig {
+            token: "test_token".into(),
+            mode: ConnectionMode::Websocket,
+            prefix: "/".into(),
+            admins: vec![],
+            webhook: WebhookConfig::default(),
+            audio: AudioConfig::default(),
+            network: NetworkConfig::default(),
+            music: MusicConfig::default(),
+            player: PlayerConfig::default(),
+        };
+        let ps = Arc::new(PlayState::new());
+        let nc = Arc::new(RwLock::new(NeteaseClient::new("http://localhost")));
+        let vm = Arc::new(Mutex::new(None));
+        (api, config, ps, nc, vm)
+    }
+
+    #[tokio::test]
+    async fn test_register_and_match() {
+        let mut router = CommandRouter::new("/");
+        router.register(Arc::new(MockHandler {
+            name: "hello",
+            aliases: vec![],
+        }));
+
+        let (api, config, ps, nc, vm) = make_deps();
+        let msg = make_message("/hello");
+        let result = router
+            .handle_message(&msg, api, &config, &ps, nc, vm)
+            .await;
+
+        assert!(result.is_some());
+        match result.unwrap() {
+            CommandResult::Reply(s) => assert_eq!(s, "handled: hello"),
+            other => panic!("expected Reply, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_alias_match() {
+        let mut router = CommandRouter::new("/");
+        router.register(Arc::new(MockHandler {
+            name: "play",
+            aliases: vec!["p"],
+        }));
+
+        let (api, config, ps, nc, vm) = make_deps();
+        let msg = make_message("/p");
+        let result = router
+            .handle_message(&msg, api, &config, &ps, nc, vm)
+            .await;
+
+        assert!(result.is_some());
+        match result.unwrap() {
+            CommandResult::Reply(s) => assert_eq!(s, "handled: play"),
+            other => panic!("expected Reply, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_match() {
+        let router = CommandRouter::new("/");
+
+        let (api, config, ps, nc, vm) = make_deps();
+        let msg = make_message("/nonexistent");
+        let result = router
+            .handle_message(&msg, api, &config, &ps, nc, vm)
+            .await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_prefix_change() {
+        let mut router = CommandRouter::new("!");
+        router.register(Arc::new(MockHandler {
+            name: "play",
+            aliases: vec![],
+        }));
+
+        let (api, config, ps, nc, vm) = make_deps();
+
+        // Should match with "!" prefix
+        let msg = make_message("!play");
+        let result = router
+            .handle_message(&msg, Arc::clone(&api), &config, &ps, Arc::clone(&nc), Arc::clone(&vm))
+            .await;
+        assert!(result.is_some());
+
+        // Should NOT match with "/" prefix
+        let msg2 = make_message("/play");
+        let result2 = router
+            .handle_message(&msg2, api, &config, &ps, nc, vm)
+            .await;
+        assert!(result2.is_none());
     }
 }

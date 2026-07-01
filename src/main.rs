@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, error, Level};
+use tracing::{info, error, warn, Level};
 use unicode_width::UnicodeWidthStr;
 
 use kook_music_bot::api::KookClient;
@@ -78,24 +78,38 @@ macro_rules! status_fail {
 #[tokio::main]
 async fn main() -> Result<()> {
     init_logging(Level::INFO);
-    
+
     info!("");
     info!("╭{}╮", "─".repeat(WIDTH - 2));
     info!("│{}│", center("🎵 Kook Music Bot (RKM) v0.1.0", WIDTH - 2));
     info!("│{}│", center("Rust Implementation", WIDTH - 2));
     info!("╰{}╯", "─".repeat(WIDTH - 2));
     info!("");
-    
-    if let Err(e) = run_bot(None).await {
-        error!("");
-        error!("╭{}╮", "─".repeat(WIDTH - 2));
-        error!("│{}│", center("❌ 启动失败", WIDTH - 2));
-        error!("╰{}╯", "─".repeat(WIDTH - 2));
-        error!("  错误: {}", e);
-        error!("");
-        std::process::exit(1);
+
+    let shutdown_signal = tokio::signal::ctrl_c();
+
+    tokio::select! {
+        result = run_bot(None) => {
+            if let Err(e) = result {
+                error!("");
+                error!("╭{}╮", "─".repeat(WIDTH - 2));
+                error!("│{}│", center("❌ 启动失败", WIDTH - 2));
+                error!("╰{}╯", "─".repeat(WIDTH - 2));
+                error!("  错误: {}", e);
+                error!("");
+                std::process::exit(1);
+            }
+        }
+        _ = shutdown_signal => {
+            info!("");
+            info!("╭{}╮", "─".repeat(WIDTH - 2));
+            info!("│{}│", center("🛑 收到关闭信号", WIDTH - 2));
+            info!("╰{}╯", "─".repeat(WIDTH - 2));
+            info!("  正在优雅关闭...");
+            info!("");
+        }
     }
-    
+
     Ok(())
 }
 
@@ -115,6 +129,18 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
     info!("");
     
     check_dependencies()?;
+
+    // 启动 API 后端（如果配置了本地路径）
+    let backend_manager = {
+        let netease_dir = std::env::var("NETEASE_API_DIR").unwrap_or_default();
+        let qqmusic_dir = std::env::var("QQMUSIC_API_DIR").unwrap_or_default();
+        let manager = kook_music_bot::common::backend::ApiBackendManager::new(
+            kook_music_bot::common::backend::default_backends(&netease_dir, &qqmusic_dir)
+        );
+        manager.start_all().await;
+        manager
+    };
+
     check_netease_api(&config.music.netease_api_url).await?;
     cleanup_cache(&config.music.cache_dir, config.music.max_cache_size_mb).await?;
     
@@ -133,6 +159,7 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
         }
     }
     
+    backend_manager.shutdown().await;
     Ok(())
 }
 
@@ -271,7 +298,7 @@ async fn cleanup_cache(cache_dir: &str, max_size_mb: u64) -> Result<()> {
     let current_mb = cache::get_cache_size_mb(cache_dir);
     info!("  当前: {} MB", current_mb);
     
-    cache::cleanup_cache(cache_dir, max_size_mb);
+    cache::cleanup_cache(cache_dir, max_size_mb).await;
     
     let after_mb = cache::get_cache_size_mb(cache_dir);
     if after_mb < current_mb {
@@ -301,23 +328,56 @@ async fn start_webhook_mode(config: BotConfig, handler: BotWebhookHandler) -> Re
 async fn start_websocket_mode(
     config: BotConfig,
     bot: Arc<Bot>,
-    handler: BotEventHandler,
+    _handler: BotEventHandler,
 ) -> Result<()> {
     box_title!("🚀 启动 WebSocket 连接");
 
-    let gateway_url = {
-        let api_client = bot.api_client();
-        let client = api_client.read().await;
-        client.as_ref().unwrap().get_gateway_url().await?
-    };
+    let mut reconnect_count = 0u32;
 
-    let client = GatewayClient::with_all_intents(&config.token);
-    client.connect(&gateway_url).await?;
-    client.set_event_handler(Box::new(handler)).await;
+    loop {
+        let gateway_url = {
+            let api_client = bot.api_client();
+            let client = api_client.read().await;
+            match client.as_ref().unwrap().get_gateway_url().await {
+                Ok(url) => url,
+                Err(e) => {
+                    error!("获取 Gateway URL 失败: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            }
+        };
 
-    info!("├{}┤", "─".repeat(WIDTH - 2));
-    info!("│{}│", center("✨ 已连接，等待事件...", WIDTH - 2));
-    box_end!();
+        let client = GatewayClient::with_all_intents(&config.token);
+        match client.connect(&gateway_url).await {
+            Ok(_) => {
+                if reconnect_count > 0 {
+                    info!("重连成功 (第 {} 次尝试)", reconnect_count);
+                }
+                reconnect_count = 0;
+            }
+            Err(e) => {
+                reconnect_count += 1;
+                let delay = std::cmp::min(2u64.pow(reconnect_count), 60);
+                warn!("连接失败: {}，{}秒后重连", e, delay);
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                continue;
+            }
+        };
 
-    client.run().await.map_err(|e| anyhow::anyhow!(e))
+        client.set_event_handler(Box::new(BotEventHandler::new(bot.clone()))).await;
+
+        if reconnect_count == 0 {
+            info!("├{}┤", "─".repeat(WIDTH - 2));
+            info!("│{}│", center("✨ 已连接，等待事件...", WIDTH - 2));
+            box_end!();
+        }
+
+        if let Err(e) = client.run().await {
+            reconnect_count += 1;
+            let delay = std::cmp::min(2u64.pow(reconnect_count), 60);
+            warn!("Gateway 断开: {}，{}秒后重连...", e, delay);
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        }
+    }
 }

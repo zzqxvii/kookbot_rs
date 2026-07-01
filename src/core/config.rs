@@ -25,6 +25,8 @@ pub struct BotConfig {
     #[serde(default = "default_prefix")]
     pub prefix: String,
     #[serde(default)]
+    pub admins: Vec<String>,
+    #[serde(default)]
     pub webhook: WebhookConfig,
     #[serde(default)]
     pub audio: AudioConfig,
@@ -34,6 +36,13 @@ pub struct BotConfig {
     pub music: MusicConfig,
     #[serde(default)]
     pub player: PlayerConfig,
+}
+
+impl BotConfig {
+    /// 检查用户是否是管理员
+    pub fn is_admin(&self, user_id: &str) -> bool {
+        self.admins.is_empty() || self.admins.iter().any(|a| a == user_id)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -98,8 +107,13 @@ pub struct MusicConfig {
     #[serde(default = "default_netease_api_url")]
     pub netease_api_url: String,
     pub netease_cookie: Option<String>,
+    #[serde(default = "default_qqmusic_api_url")]
+    pub qqmusic_api_url: String,
+    pub qqmusic_cookie: Option<String>,
+    #[serde(default = "default_bilibili_api_url")]
+    pub bilibili_api_url: String,
+    pub bilibili_cookie: Option<String>,
 }
-
 impl Default for MusicConfig {
     fn default() -> Self {
         Self {
@@ -107,6 +121,10 @@ impl Default for MusicConfig {
             max_cache_size_mb: default_max_cache_size(),
             netease_api_url: default_netease_api_url(),
             netease_cookie: None,
+            qqmusic_api_url: default_qqmusic_api_url(),
+            qqmusic_cookie: None,
+            bilibili_api_url: default_bilibili_api_url(),
+            bilibili_cookie: None,
         }
     }
 }
@@ -167,6 +185,14 @@ fn default_max_cache_size() -> u64 {
 }
 fn default_netease_api_url() -> String {
     "http://localhost:3000".to_string()
+}
+
+fn default_qqmusic_api_url() -> String {
+    "http://localhost:3300".to_string()
+}
+
+fn default_bilibili_api_url() -> String {
+    "http://localhost:3400".to_string()
 }
 
 fn default_max_queue_size() -> usize {

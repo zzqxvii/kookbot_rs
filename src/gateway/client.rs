@@ -4,7 +4,7 @@ use crate::core::error::{BotError, Result};
 use crate::gateway::events::{parse_event, Event, EventHandler};
 use crate::gateway::protocol::{GatewayMessage, Intents, SessionInfo, SignalType};
 use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
@@ -19,11 +19,11 @@ use tracing::{debug, error, info, trace, warn};
 pub struct GatewayClient {
     token: String,
     intents: u32,
-    ws_stream: Arc<RwLock<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
-    session_info: Arc<RwLock<SessionInfo>>,
-    event_handler: Arc<RwLock<Option<Box<dyn EventHandler>>>>,
-    running: Arc<RwLock<bool>>,
-    heartbeat_interval: Arc<RwLock<u64>>,
+    ws_stream: RwLock<Option<WebSocketStream<MaybeTlsStream<TcpStream>>>>,
+    session_info: RwLock<SessionInfo>,
+    event_handler: RwLock<Option<Box<dyn EventHandler>>>,
+    running: AtomicBool,
+    heartbeat_interval: AtomicU64,
 }
 
 impl GatewayClient {
@@ -31,11 +31,11 @@ impl GatewayClient {
         Self {
             token: token.into(),
             intents,
-            ws_stream: Arc::new(RwLock::new(None)),
-            session_info: Arc::new(RwLock::new(SessionInfo::default())),
-            event_handler: Arc::new(RwLock::new(None)),
-            running: Arc::new(RwLock::new(false)),
-            heartbeat_interval: Arc::new(RwLock::new(30000)),
+            ws_stream: RwLock::new(None),
+            session_info: RwLock::new(SessionInfo::default()),
+            event_handler: RwLock::new(None),
+            running: AtomicBool::new(false),
+            heartbeat_interval: AtomicU64::new(30000),
         }
     }
 
@@ -71,7 +71,7 @@ impl GatewayClient {
         info!("HTTP 响应状态: {:?}", response.status());
 
         *self.ws_stream.write().await = Some(ws_stream);
-        *self.running.write().await = true;
+        self.running.store(true, Ordering::Release);
 
         info!("连接完成，开始监听消息...");
         Ok(())
@@ -84,10 +84,9 @@ impl GatewayClient {
         info!("Intents: {}", self.intents);
         info!("========================================");
 
-        // 检查 WebSocket 流是否存在
         let stream_exists = self.ws_stream.read().await.is_some();
         info!("WebSocket 流状态: {}", if stream_exists { "存在" } else { "不存在" });
-        
+
         if !stream_exists {
             error!("WebSocket 流不存在，无法运行");
             return Err(BotError::GatewayError("WebSocket 流不存在".to_string()));
@@ -97,12 +96,11 @@ impl GatewayClient {
         info!("等待服务器 Hello 消息...");
         let mut hello_received = false;
         let hello_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        
+
         while tokio::time::Instant::now() < hello_deadline {
             if let Some(msg) = self.receive_message().await {
                 self.handle_message(msg).await;
-                // 检查是否收到了 Hello（heartbeat_interval 会被设置）
-                if *self.heartbeat_interval.read().await > 0 {
+                if self.heartbeat_interval.load(Ordering::Relaxed) > 0 {
                     hello_received = true;
                     info!("✓ 收到 Hello 消息，连接正常");
                     break;
@@ -110,7 +108,7 @@ impl GatewayClient {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        
+
         if !hello_received {
             error!("等待 Hello 消息超时（10秒），连接可能失败");
             return Err(BotError::GatewayError("未收到 Hello 消息".to_string()));
@@ -123,7 +121,7 @@ impl GatewayClient {
         info!("[Gateway] 开始接收事件，心跳间隔 30 秒");
 
         loop {
-            if !*self.running.read().await {
+            if !self.running.load(Ordering::Acquire) {
                 warn!("Gateway 连接已断开，退出运行循环");
                 break;
             }
@@ -148,18 +146,18 @@ impl GatewayClient {
 
     async fn receive_message(&self) -> Option<Message> {
         let mut stream_guard = self.ws_stream.write().await;
-        
+
         if let Some(ref mut stream) = *stream_guard {
             match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
                 Ok(Some(Ok(msg))) => Some(msg),
                 Ok(Some(Err(e))) => {
                     error!("WebSocket 读取错误: {}", e);
-                    *self.running.write().await = false;
+                    self.running.store(false, Ordering::Release);
                     None
                 }
                 Ok(None) => {
                     warn!("WebSocket 连接已关闭");
-                    *self.running.write().await = false;
+                    self.running.store(false, Ordering::Release);
                     None
                 }
                 Err(_) => None,
@@ -198,7 +196,7 @@ impl GatewayClient {
             }
             Message::Close(frame) => {
                 warn!("[Gateway] 收到关闭帧: {:?}", frame);
-                *self.running.write().await = false;
+                self.running.store(false, Ordering::Release);
             }
             Message::Ping(data) => {
                 info!("[Gateway] 收到 WebSocket Ping, 长度: {}", data.len());
@@ -228,20 +226,20 @@ impl GatewayClient {
                 if let Some(sn) = msg.sn {
                     self.session_info.write().await.last_sn = sn;
                 }
-                
+
                 if let Some(data) = &msg.d {
                     let msg_type = data.get("type").and_then(|t| t.as_i64()).unwrap_or(-1);
                     let event_type = data.get("extra")
                         .and_then(|e| e.get("type"))
                         .and_then(|t| t.as_str())
                         .unwrap_or("unknown");
-                    
+
                     info!("[Gateway] 收到事件: type={}, extra.type={}", msg_type, event_type);
-                    
+
                     if msg_type == 255 {
                         debug!("[Gateway] 系统事件原始数据: {}", serde_json::to_string(data).unwrap_or_default());
                     }
-                    
+
                     if let Some(event) = parse_event(data.clone()) {
                         self.dispatch_event(event).await;
                     } else {
@@ -251,10 +249,10 @@ impl GatewayClient {
             }
             SignalType::Hello => {
                 info!("🔗 收到 HELLO，连接到 Kook Gateway 成功");
-                
+
                 if let Some(interval) = msg.heartbeat_interval() {
                     info!("[Gateway] 心跳间隔: {}ms", interval);
-                    *self.heartbeat_interval.write().await = interval;
+                    self.heartbeat_interval.store(interval, Ordering::Relaxed);
                 }
                 if let Some(session_id) = msg.session_id() {
                     info!("[Gateway] Session ID: {}", session_id);
@@ -270,7 +268,7 @@ impl GatewayClient {
             }
             SignalType::Reconnect => {
                 warn!("⚠️ 服务器要求重连");
-                *self.running.write().await = false;
+                self.running.store(false, Ordering::Release);
             }
             SignalType::Resume => {
                 debug!("收到 Resume");
@@ -283,7 +281,6 @@ impl GatewayClient {
 
     async fn send_heartbeat(&self) {
         let sn = self.session_info.read().await.last_sn;
-        // 心跳包格式: s=2 是 PING
         let heartbeat = serde_json::json!({
             "s": 2,
             "sn": sn
@@ -320,7 +317,7 @@ impl GatewayClient {
             Event::Unknown(_) => "Unknown",
         };
         info!("[Gateway] 分发事件: {}", event_type);
-        
+
         if let Some(handler) = self.event_handler.read().await.as_ref() {
             handler.on_event(event).await;
         } else {
@@ -329,7 +326,7 @@ impl GatewayClient {
     }
 
     pub async fn disconnect(&self) {
-        *self.running.write().await = false;
+        self.running.store(false, Ordering::Release);
         let mut stream = self.ws_stream.write().await;
         if let Some(s) = stream.take() {
             let (mut write, _) = s.split();
@@ -338,7 +335,7 @@ impl GatewayClient {
     }
 
     pub async fn is_connected(&self) -> bool {
-        *self.running.read().await
+        self.running.load(Ordering::Acquire)
     }
 }
 
@@ -348,9 +345,9 @@ fn try_decompress(data: &[u8]) -> std::result::Result<String, String> {
 
     let mut decoder = ZlibDecoder::new(data);
     let mut decompressed = String::new();
-    
+
     decoder.read_to_string(&mut decompressed)
         .map_err(|e| format!("解压失败: {}", e))?;
-    
+
     Ok(decompressed)
 }

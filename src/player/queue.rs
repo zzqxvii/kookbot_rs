@@ -311,3 +311,106 @@ impl Default for QueueManager {
         Self::new(QueueConfig::default())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_music(title: &str, author: &str) -> Music {
+        Music {
+            title: title.into(),
+            author: author.into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_dequeue() {
+        let config = QueueConfig {
+            max_size: 10,
+            allow_duplicates: true,
+            ..Default::default()
+        };
+        let qm = QueueManager::new(config);
+
+        qm.add(make_music("song1", "artist1"), "user".into())
+            .await
+            .unwrap();
+        qm.add(make_music("song2", "artist2"), "user".into())
+            .await
+            .unwrap();
+        qm.add(make_music("song3", "artist3"), "user".into())
+            .await
+            .unwrap();
+
+        // First dequeue
+        let item1 = qm.next().await.unwrap();
+        assert_eq!(item1.music.title, "song1");
+
+        // Second dequeue
+        let item2 = qm.next().await.unwrap();
+        assert_eq!(item2.music.title, "song2");
+
+        // Third dequeue
+        let item3 = qm.next().await.unwrap();
+        assert_eq!(item3.music.title, "song3");
+
+        // Queue exhausted
+        let item4 = qm.next().await;
+        assert!(item4.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_max_size() {
+        let config = QueueConfig {
+            max_size: 2,
+            allow_duplicates: true,
+            ..Default::default()
+        };
+        let qm = QueueManager::new(config);
+
+        qm.add(make_music("song1", "artist1"), "user".into())
+            .await
+            .unwrap();
+        qm.add(make_music("song2", "artist2"), "user".into())
+            .await
+            .unwrap();
+
+        // Third add should fail — queue full
+        let result = qm
+            .add(make_music("song3", "artist3"), "user".into())
+            .await;
+        assert!(result.is_err());
+        assert_eq!(qm.len().await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_prevent_duplicates() {
+        let config = QueueConfig {
+            max_size: 10,
+            allow_duplicates: false,
+            ..Default::default()
+        };
+        let qm = QueueManager::new(config);
+
+        qm.add(make_music("song1", "artist1"), "user".into())
+            .await
+            .unwrap();
+
+        // Adding same title+author should be rejected
+        let result = qm
+            .add(make_music("song1", "artist1"), "user".into())
+            .await;
+        assert!(result.is_err());
+        assert_eq!(qm.len().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_empty_dequeue() {
+        let config = QueueConfig::default();
+        let qm = QueueManager::new(config);
+
+        let result = qm.next().await;
+        assert!(result.is_none());
+    }
+}

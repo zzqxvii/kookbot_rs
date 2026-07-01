@@ -5,7 +5,15 @@ use tracing::{debug, info, warn};
 
 /// 清理缓存目录
 /// 超过限制时按修改时间删除最旧的文件
-pub fn cleanup_cache(cache_dir: &str, max_size_mb: u64) {
+/// 内部使用 spawn_blocking 避免阻塞 async 运行时
+pub async fn cleanup_cache(cache_dir: &str, max_size_mb: u64) {
+    let cache_dir = cache_dir.to_string();
+    tokio::task::spawn_blocking(move || cleanup_cache_sync(&cache_dir, max_size_mb))
+        .await
+        .unwrap_or_else(|e| warn!("缓存清理任务失败: {}", e));
+}
+
+fn cleanup_cache_sync(cache_dir: &str, max_size_mb: u64) {
     let cache_path = Path::new(cache_dir);
     if !cache_path.exists() {
         return;
