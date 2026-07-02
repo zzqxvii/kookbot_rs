@@ -55,6 +55,36 @@ pub struct CommandContext<'a> {
     pub voice_manager: Arc<Mutex<Option<VoiceManager>>>,
 }
 
+/// 后台任务上下文 — 可 Clone 的共享状态集合
+///
+/// 消除 spawn 任务前手动 clone 5-6 个 Arc 字段的样板代码。
+/// 使用方式：
+/// ```ignore
+/// let bctx = ctx.to_bot_context();
+/// tokio::spawn(async move { ... use bctx.api_client, bctx.config ... });
+/// ```
+#[derive(Clone)]
+pub struct BotContext {
+    pub api_client: Arc<RwLock<Option<KookClient>>>,
+    pub config: Arc<BotConfig>,
+    pub play_state: Arc<PlayState>,
+    pub netease_client: Arc<RwLock<NeteaseClient>>,
+    pub voice_manager: Arc<Mutex<Option<VoiceManager>>>,
+}
+
+impl<'a> CommandContext<'a> {
+    /// 创建可 Clone 的后台任务上下文
+    pub fn to_bot_context(&self) -> BotContext {
+        BotContext {
+            api_client: self.api_client.clone(),
+            config: Arc::new(self.config.clone()),
+            play_state: self.play_state.clone(),
+            netease_client: self.netease_client.clone(),
+            voice_manager: self.voice_manager.clone(),
+        }
+    }
+}
+
 /// 命令处理结果
 #[derive(Debug, Clone)]
 pub enum CommandResult {

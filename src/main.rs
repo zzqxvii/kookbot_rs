@@ -4,76 +4,17 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, error, warn, Level};
-use unicode_width::UnicodeWidthStr;
 
 use kook_music_bot::api::KookClient;
 use kook_music_bot::bot::{create_bot, Bot, BotEventHandler, BotWebhookHandler};
 use kook_music_bot::core::config::{BotConfig, ConnectionMode};
 use kook_music_bot::common::logging::init_logging;
 use kook_music_bot::common::cache;
+use kook_music_bot::common::console::{w, WIDTH, center};
 use kook_music_bot::webhook::WebhookServer;
 use kook_music_bot::gateway::GatewayClient;
 use kook_music_bot::music::NeteaseClient;
-
-const WIDTH: usize = 52;
-
-fn w(s: &str) -> usize {
-    UnicodeWidthStr::width(s)
-}
-
-fn center(s: &str, width: usize) -> String {
-    let s_width = w(s);
-    if s_width >= width {
-        s.to_string()
-    } else {
-        let left = (width - s_width) / 2;
-        let right = width - s_width - left;
-        format!("{}{}{}", " ".repeat(left), s, " ".repeat(right))
-    }
-}
-
-fn line(left: &str, content: &str, right: &str, width: usize) -> String {
-    let content_width = w(content);
-    let total = w(left) + content_width + w(right);
-    if total >= width {
-        format!("{}{}{}", left, content, right)
-    } else {
-        format!("{}{}{}{}", left, content, " ".repeat(width - total), right)
-    }
-}
-
-macro_rules! box_title {
-    ($title:expr) => {
-        info!("╭{}╮", "─".repeat(WIDTH - 2));
-        info!("│{}│", center($title, WIDTH - 2));
-        info!("├{}┤", "─".repeat(WIDTH - 2));
-    };
-}
-
-macro_rules! box_item {
-    ($label:expr, $value:expr) => {
-        info!("│ {}│", line("", &format!("{}: {}", $label, $value), "", WIDTH - 3));
-    };
-}
-
-macro_rules! box_end {
-    () => {
-        info!("╰{}╯", "─".repeat(WIDTH - 2));
-        info!("");
-    };
-}
-
-macro_rules! status_ok {
-    ($label:expr, $value:expr) => {
-        info!("  ✅ {}: {}", $label, $value);
-    };
-}
-
-macro_rules! status_fail {
-    ($label:expr, $msg:expr) => {
-        info!("  ❌ {}: {}", $label, $msg);
-    };
-}
+use kook_music_bot::{box_title, box_item, box_end, status_ok, status_fail};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -337,8 +278,13 @@ async fn start_websocket_mode(
     loop {
         let gateway_url = {
             let api_client = bot.api_client();
-            let client = api_client.read().await;
-            match client.as_ref().unwrap().get_gateway_url().await {
+            let guard = api_client.read().await;
+            let Some(client) = guard.as_ref() else {
+                error!("API 客户端不可用，5秒后重试");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            };
+            match client.get_gateway_url().await {
                 Ok(url) => url,
                 Err(e) => {
                     error!("获取 Gateway URL 失败: {}", e);

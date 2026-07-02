@@ -122,7 +122,8 @@ impl FFmpegOpusEncoder {
             self.ffmpeg_process = Some(child);
         }
 
-        Ok(self.ffmpeg_process.as_mut().unwrap())
+        self.ffmpeg_process.as_mut()
+            .ok_or_else(|| BotError::OpusError("FFmpeg 进程未启动".to_string()))
     }
 
     /// 编码一帧 PCM 数据

@@ -578,3 +578,113 @@ pub fn parse_event(data: serde_json::Value) -> Option<Event> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_text_message() {
+        let json = serde_json::json!({
+            "channel_type": "GROUP",
+            "type": 1,
+            "target_id": "chan1",
+            "author_id": "user1",
+            "content": "/help",
+            "msg_id": "msg-001",
+            "msg_timestamp": 1700000000000i64,
+            "extra": {
+                "type": 1,
+                "guild_id": "guild1",
+                "author": {
+                    "id": "user1",
+                    "username": "testuser",
+                    "nickname": "Test",
+                    "identify_num": "0001",
+                    "online": true,
+                    "bot": false,
+                    "status": 1,
+                    "avatar": "",
+                    "is_vip": false,
+                    "is_music_vip": false
+                }
+            }
+        });
+        let event = parse_event(json).expect("should parse message event");
+        match event {
+            Event::Message(msg) => {
+                assert_eq!(msg.content, "/help");
+                assert_eq!(msg.author_id, "user1");
+            }
+            _ => panic!("expected Message event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_button_click() {
+        let json = serde_json::json!({
+            "channel_type": "GROUP",
+            "type": 255,
+            "target_id": "chan1",
+            "author_id": "1",
+            "content": "",
+            "msg_id": "",
+            "msg_timestamp": 1700000000000i64,
+            "extra": {
+                "type": "message_btn_click",
+                "body": {
+                    "user_id": "user1",
+                    "target_id": "chan1",
+                    "msg_id": "card-msg-001",
+                    "value": "nextMusic",
+                    "user_info": {
+                        "id": "user1",
+                        "username": "testuser",
+                        "nickname": "Test",
+                        "identifyNum": "0001",
+                        "online": true,
+                        "bot": false,
+                        "avatar": ""
+                    }
+                }
+            }
+        });
+        let event = parse_event(json).expect("should parse button click event");
+        match event {
+            Event::ButtonClick(btn) => {
+                assert_eq!(btn.extra.body.value, "nextMusic");
+            }
+            _ => panic!("expected ButtonClick event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_unknown_type() {
+        let json = serde_json::json!({
+            "type": 999,
+            "extra": {}
+        });
+        let event = parse_event(json).expect("should return Unknown for unhandled type");
+        assert!(matches!(event, Event::Unknown(_)));
+    }
+
+    #[test]
+    fn test_parse_voice_join() {
+        let json = serde_json::json!({
+            "channel_type": "GROUP",
+            "type": 255,
+            "target_id": "guild1",
+            "author_id": "1",
+            "msg_timestamp": 1700000000000i64,
+            "extra": {
+                "type": "joined_channel",
+                "body": {
+                    "user_id": "user1",
+                    "channel_id": "vc1"
+                }
+            }
+        });
+        let event = parse_event(json).expect("should parse voice join event");
+        assert!(matches!(event, Event::UserJoinVoice(_)));
+    }
+}

@@ -171,13 +171,14 @@ impl AudioStreamer {
     /// 流式传输 URL 音频 (使用 FFmpeg 直接推流)
     pub fn stream_url(&mut self, url: &str) -> Result<()> {
         info!("开始从 URL 流式传输: {}", url);
-        
+
         if self.direct_streamer.is_none() {
             let config = StreamerConfig::from(&self.streaming_info);
             self.direct_streamer = Some(FFmpegDirectStreamer::new(config, self.play_state.clone())?);
         }
-        
-        let streamer = self.direct_streamer.as_mut().unwrap();
+
+        let streamer = self.direct_streamer.as_mut()
+            .ok_or_else(|| crate::core::error::BotError::StreamNotStarted)?;
         streamer.start_stream_url(
             url,
             &self.streaming_info.ip,
@@ -187,11 +188,11 @@ impl AudioStreamer {
         self.running.store(true, Ordering::Release);
         Ok(())
     }
-    
-    /// 等待推流结束
-    pub fn wait(&mut self) -> Result<()> {
+
+    /// 等待推流结束（异步）
+    pub async fn wait(&mut self) -> Result<()> {
         if let Some(streamer) = &mut self.direct_streamer {
-            streamer.wait()?;
+            streamer.wait().await?;
         }
         self.running.store(false, Ordering::Release);
         Ok(())

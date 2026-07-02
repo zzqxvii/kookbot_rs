@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod cache;
 pub mod card;
+pub mod console;
 pub mod logging;
 pub mod models;
 pub mod play_state;

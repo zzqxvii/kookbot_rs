@@ -89,13 +89,12 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
-/// 验证请求签名
+/// 验证请求签名（委托给 `verifier` 模块，消除重复逻辑）
 async fn verify_request(
     token: &str,
     headers: &HeaderMap,
     body: &str,
 ) -> Result<()> {
-    // 从头部提取信息
     let timestamp = headers
         .get("X-Kook-Timestamp")
         .and_then(|v| v.to_str().ok())
@@ -106,25 +105,8 @@ async fn verify_request(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| BotError::ConfigError("缺少 X-Kook-Signature 头部".to_string()))?;
 
-    // 构造签名字符串
-    use base64::Engine;
-    let payload = format!("{timestamp}.{}", base64::engine::general_purpose::STANDARD.encode(body));
-
-    // 计算 HMAC-SHA256
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(token.as_bytes())
-        .map_err(|e| BotError::ConfigError(format!("签名密钥错误: {}", e)))?;
-    mac.update(payload.as_bytes());
-    let result = mac.finalize();
-    let computed_sig = hex::encode(result.into_bytes());
-
-    // 比较签名
-    if computed_sig != signature {
-        return Err(BotError::ConfigError("签名验证失败".to_string()));
-    }
+    crate::webhook::verifier::verify_signature(token, body.as_bytes(), timestamp, signature)
+        .map_err(|e| BotError::ConfigError(e.to_string()))?;
 
     Ok(())
 }

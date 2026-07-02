@@ -57,9 +57,16 @@ impl RtpPacket {
         self
     }
 
-    /// 序列化为字节
+    /// 序列化为新 Vec（测试/兼容性用途，生产代码使用 `write_to` 复用缓冲区）
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(12 + self.payload.len());
+        self.write_to(&mut buf);
+        buf
+    }
+
+    /// 序列化到已有缓冲区（复用分配，不清除原内容）
+    pub fn write_to(&self, buf: &mut Vec<u8>) {
+        buf.reserve(12 + self.payload.len());
 
         // 字节 0: 版本(2) | 填充(1) | 扩展(1) | CSRC 计数(4)
         let byte0 = (self.version << 6)
@@ -83,8 +90,6 @@ impl RtpPacket {
 
         // 负载
         buf.extend_from_slice(&self.payload);
-
-        buf
     }
 }
 
@@ -101,6 +106,8 @@ pub struct RtpSender {
     last_send_time: Option<Instant>,
     packets_sent: u64,
     bytes_sent: u64,
+    /// 预分配发送缓冲区，避免每帧重复分配
+    send_buf: Vec<u8>,
 }
 
 impl RtpSender {
@@ -138,10 +145,11 @@ impl RtpSender {
             timestamp: 0,
             payload_type,
             sample_rate,
-            frame_duration_ms: 20, // 默认 20ms 帧
+            frame_duration_ms: 20,
             last_send_time: None,
             packets_sent: 0,
             bytes_sent: 0,
+            send_buf: Vec::with_capacity(1500), // 预分配 MTU 大小
         })
     }
 
@@ -151,12 +159,13 @@ impl RtpSender {
         self
     }
 
-    /// 发送 Opus 帧
+    /// 发送 Opus 帧（复用预分配缓冲区，避免每帧分配）
     pub fn send_opus_frame(
         &mut self,
         opus_data: &[u8],
     ) -> Result<()> {
-        // 创建 RTP 包
+        // 复用预分配缓冲区序列化 RTP 包（避免每帧 Vec 分配）
+        self.send_buf.clear();
         let packet = RtpPacket::new(
             self.payload_type,
             self.sequence_number,
@@ -164,12 +173,10 @@ impl RtpSender {
             self.ssrc,
             opus_data.to_vec(),
         );
-
-        // 序列化为字节
-        let data = packet.to_bytes();
+        packet.write_to(&mut self.send_buf);
 
         // 发送
-        match self.socket.send(&data) {
+        match self.socket.send(&self.send_buf) {
             Ok(sent) => {
                 self.packets_sent += 1;
                 self.bytes_sent += sent as u64;
@@ -181,7 +188,6 @@ impl RtpSender {
                 );
             }
             Err(e) => {
-                // UDP 发送失败通常不重要，继续
                 if e.kind() != std::io::ErrorKind::WouldBlock {
                     warn!("发送 RTP 包失败: {}", e);
                 }

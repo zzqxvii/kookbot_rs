@@ -67,7 +67,7 @@ where
 ///
 /// # 示例
 /// ```
-/// use kook_music_bot::logging::init_logging;
+/// use kook_music_bot::common::logging::init_logging;
 ///
 /// init_logging(tracing::Level::INFO);
 /// ```

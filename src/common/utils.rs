@@ -65,7 +65,7 @@ pub fn extract_filename(path: &str) -> Option<&str> {
 /// # 示例
 /// ```
 /// use std::path::Path;
-/// use kook_music_bot::utils::update_netease_cookie;
+/// use kook_music_bot::common::utils::update_netease_cookie;
 ///
 /// // update_netease_cookie(Path::new("config.toml"), "MUSIC_U=xxx;").unwrap();
 /// ```
@@ -156,4 +156,25 @@ mod tests {
         assert!(is_valid_url("http://example.com"));
         assert!(!is_valid_url("ftp://example.com"));
     }
+}
+
+/// 清理 cookie 字符串，移除无关属性（max-age, expires, path, domain 等）
+///
+/// 用于网易云/QQ音乐/B站 API 登录凭证的标准化处理。
+pub fn clean_cookie(raw: &str) -> String {
+    raw.split(';')
+        .map(|s| s.trim())
+        .filter(|s| {
+            let s_lower = s.to_lowercase();
+            !s_lower.starts_with("max-age")
+                && !s_lower.starts_with("expires")
+                && !s_lower.starts_with("path=")
+                && !s_lower.starts_with("domain=")
+                && !s_lower.starts_with("secure")
+                && !s_lower.starts_with("httponly")
+                && !s_lower.starts_with("samesite")
+                && !s.is_empty()
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }

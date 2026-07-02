@@ -8,6 +8,15 @@ use std::sync::Mutex;
 use tracing::info;
 
 /// 播放状态 — 所有播放控制信号和统计信息
+///
+/// # 关于 `std::sync::Mutex` 的使用
+///
+/// `play_msg_id` 和 `channel_id` 使用 `std::sync::Mutex` 而非 `tokio::sync::Mutex`，
+/// 原因如下：
+/// - 锁持有时间为微秒级（仅 clone/set/take 一个 `Option<String>`）
+/// - 从不在 `.await` 点之间持有锁
+/// - `tokio::sync::Mutex` 在此场景下反而增加 async 开销
+/// - 使用 `.lock().ok()` 模式，锁中毒时静默降级为 None
 pub struct PlayState {
     /// 当前播放进程 PID
     pid: AtomicU32,
@@ -17,14 +26,16 @@ pub struct PlayState {
     stop_requested: AtomicBool,
     /// 是否请求下一首
     next_requested: AtomicBool,
-    /// 播放卡片消息 ID
+    /// 播放卡片消息 ID（微秒级锁, 从不跨 .await）
     play_msg_id: Mutex<Option<String>>,
-    /// 当前语音频道 ID
+    /// 当前语音频道 ID（微秒级锁, 从不跨 .await）
     channel_id: Mutex<Option<String>>,
     /// 已播放歌曲计数
     play_count: AtomicU64,
-    /// 播放开始时间 (Unix timestamp)
-    start_time: Mutex<Option<u64>>,
+    /// 播放开始时间 — Unix 时间戳（秒），0 = 未开始
+    start_time_secs: AtomicU64,
+    /// 是否已记录开始时间
+    has_started: AtomicBool,
     /// 当前歌曲总时长（秒），用于进度条
     current_song_duration: AtomicU64,
 }
@@ -45,7 +56,8 @@ impl PlayState {
             play_msg_id: Mutex::new(None),
             channel_id: Mutex::new(None),
             play_count: AtomicU64::new(0),
-            start_time: Mutex::new(None),
+            start_time_secs: AtomicU64::new(0),
+            has_started: AtomicBool::new(false),
             current_song_duration: AtomicU64::new(0),
         }
     }
@@ -62,10 +74,9 @@ impl PlayState {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if let Ok(mut guard) = self.start_time.lock() {
-            if guard.is_none() {
-                *guard = Some(now);
-            }
+        // 仅在首次播放时记录开始时间（play_count 递增在 set_playing 末尾）
+        if !self.has_started.swap(true, Ordering::Release) {
+            self.start_time_secs.store(now, Ordering::Release);
         }
 
         self.play_count.fetch_add(1, Ordering::Relaxed);
@@ -82,9 +93,8 @@ impl PlayState {
         self.play_count.store(0, Ordering::Release);
         self.stop_requested.store(false, Ordering::Release);
         self.next_requested.store(false, Ordering::Release);
-        if let Ok(mut guard) = self.start_time.lock() {
-            *guard = None;
-        }
+        self.has_started.store(false, Ordering::Release);
+        self.start_time_secs.store(0, Ordering::Release);
         if let Ok(mut guard) = self.play_msg_id.lock() {
             *guard = None;
         }
@@ -106,12 +116,19 @@ impl PlayState {
     }
 
     pub fn get_start_time(&self) -> Option<u64> {
-        self.start_time.lock().ok().and_then(|g| *g)
+        if self.has_started.load(Ordering::Acquire) {
+            let secs = self.start_time_secs.load(Ordering::Relaxed);
+            if secs > 0 {
+                return Some(secs);
+            }
+        }
+        None
     }
 
     pub fn get_play_duration(&self) -> u64 {
-        if let Ok(guard) = self.start_time.lock() {
-            if let Some(start) = *guard {
+        if self.has_started.load(Ordering::Acquire) {
+            let start = self.start_time_secs.load(Ordering::Relaxed);
+            if start > 0 {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -175,15 +192,14 @@ impl PlayState {
         self.channel_id.lock().ok().and_then(|g| g.clone())
     }
 
-
     // ── 歌曲时长 ──
 
     pub fn set_current_song_duration(&self, duration_secs: u64) {
-        self.current_song_duration.store(duration_secs, Ordering::Release);
+        self.current_song_duration.store(duration_secs, Ordering::Relaxed);
     }
 
     pub fn get_current_song_duration(&self) -> u64 {
-        self.current_song_duration.load(Ordering::Acquire)
+        self.current_song_duration.load(Ordering::Relaxed)
     }
 
     /// 生成播放进度条字符串
@@ -203,6 +219,7 @@ impl PlayState {
             crate::common::utils::format_duration(total)
         ))
     }
+
     // ── 进程管理 ──
 
     pub fn kill_process(&self) -> bool {

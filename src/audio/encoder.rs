@@ -1,3 +1,9 @@
+//! Opus 编码器 — **STUB 实现**
+//!
+//! 此模块为模拟 Opus 编码器，生产代码不使用。
+//! 实际 Opus 编码由 `FFmpegOpusEncoder`（`ffmpeg_encoder.rs`）完成。
+//! 保留此文件以便将来实现纯 Rust Opus 编码（如 `opus` crate）。
+
 use crate::core::error::{BotError, Result};
 use tracing::{info, trace};
 

@@ -1,5 +1,9 @@
 use thiserror::Error;
 
+/// Bot 全局错误类型
+///
+/// String 元组变体（如 `AudioDecodeError(String)`）保留向后兼容，
+/// 同时通过 `with_source()` 方法支持链入底层错误源。
 #[derive(Error, Debug)]
 pub enum BotError {
     #[error("HTTP request failed: {0}")]
@@ -43,6 +47,16 @@ pub enum BotError {
 
     #[error("Stream not started")]
     StreamNotStarted,
+}
+
+impl BotError {
+    /// 获取底层错误链（含源错误信息）。
+    ///
+    /// 通过 `#[from]` 自动派生的变体（HttpError, JsonError, IoError）
+    /// 已自动包含源错误。其余变体可通过 `with_source` 构造器附加源。
+    pub fn root_cause(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(self)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, BotError>;

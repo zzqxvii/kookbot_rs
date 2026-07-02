@@ -9,20 +9,18 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-/// 内部可变状态 — 通过 `tokio::sync::Mutex` 保护
-struct VmInner {
-    current_channel: Option<String>,
-    audio_streamer: Option<Arc<Mutex<AudioStreamer>>>,
-}
-
 /// 语音频道管理器
 ///
-/// 所有方法均接受 `&self`，内部通过 `tokio::sync::Mutex<VmInner>` 实现可变性。
-/// 调用者持有 `Arc<VoiceManager>` 即可并发调用。
+/// 扁平化设计 — 每个可变字段有独立的 `tokio::sync::Mutex`，
+/// 避免嵌套锁结构（旧版 `Mutex<VmInner>` → `Arc<Mutex<AudioStreamer>>`）。
+/// 所有方法接受 `&self`，调用者持有 `Arc<VoiceManager>` 即可并发调用。
 pub struct VoiceManager {
     kook_client: KookClient,
     config: BotConfig,
-    inner: Mutex<VmInner>,
+    /// 当前语音频道 ID
+    current_channel: Mutex<Option<String>>,
+    /// 音频流处理器（内部 `Arc<Mutex<>>` 封装 `AudioStreamer` 的 `&mut self` 方法）
+    audio_streamer: Mutex<Option<Arc<Mutex<AudioStreamer>>>>,
     play_state: Arc<PlayState>,
 }
 
@@ -33,23 +31,21 @@ impl VoiceManager {
         Ok(Self {
             kook_client,
             config: config.clone(),
-            inner: Mutex::new(VmInner {
-                current_channel: None,
-                audio_streamer: None,
-            }),
+            current_channel: Mutex::new(None),
+            audio_streamer: Mutex::new(None),
             play_state,
         })
     }
 
     /// 加入语音频道
     pub async fn join_channel(&self, channel_id: &str) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-
-        if inner.current_channel.is_some() {
-            warn!("已经在语音频道中，先离开当前频道");
-            drop(inner);
-            self.leave_channel().await?;
-            inner = self.inner.lock().await;
+        {
+            let channel = self.current_channel.lock().await;
+            if channel.is_some() {
+                warn!("已经在语音频道中，先离开当前频道");
+                drop(channel);
+                self.leave_channel().await?;
+            }
         }
 
         info!("正在加入语音频道: {}", channel_id);
@@ -91,8 +87,8 @@ impl VoiceManager {
             self.play_state.clone(),
         )?;
 
-        inner.audio_streamer = Some(Arc::new(Mutex::new(audio_streamer)));
-        inner.current_channel = Some(channel_id.to_string());
+        *self.audio_streamer.lock().await = Some(Arc::new(Mutex::new(audio_streamer)));
+        *self.current_channel.lock().await = Some(channel_id.to_string());
 
         info!("语音频道准备就绪");
         Ok(())
@@ -100,15 +96,13 @@ impl VoiceManager {
 
     /// 离开语音频道
     pub async fn leave_channel(&self) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-
-        if let Some(streamer) = &inner.audio_streamer {
-            let mut streamer = streamer.lock().await;
-            streamer.stop();
+        // 先停止音频流
+        if let Some(streamer) = self.audio_streamer.lock().await.as_ref() {
+            streamer.lock().await.stop();
         }
-        inner.audio_streamer = None;
+        *self.audio_streamer.lock().await = None;
 
-        if let Some(channel_id) = inner.current_channel.take() {
+        if let Some(channel_id) = self.current_channel.lock().await.take() {
             info!("正在离开语音频道: {}", channel_id);
             if let Err(e) = self.kook_client.leave_voice_channel(&channel_id).await {
                 warn!("离开频道 API 调用失败: {}", e);
@@ -122,24 +116,24 @@ impl VoiceManager {
     /// 播放音频文件
     pub async fn play_file(&self, file_path: impl AsRef<Path>) -> Result<()> {
         let file_path = file_path.as_ref();
-        let inner = self.inner.lock().await;
 
-        if inner.current_channel.is_none() {
-            return Err(BotError::NotInVoiceChannel);
+        {
+            let channel = self.current_channel.lock().await;
+            if channel.is_none() {
+                return Err(BotError::NotInVoiceChannel);
+            }
         }
 
-        let streamer = inner
-            .audio_streamer
-            .as_ref()
-            .ok_or(BotError::StreamNotStarted)?;
+        let streamer = {
+            let guard = self.audio_streamer.lock().await;
+            guard.as_ref().ok_or(BotError::StreamNotStarted)?.clone()
+        };
 
         info!("开始播放文件: {:?}", file_path);
 
-        let streamer_clone = Arc::clone(streamer);
         let file_path = file_path.to_path_buf();
-
         tokio::spawn(async move {
-            let mut streamer = streamer_clone.lock().await;
+            let mut streamer = streamer.lock().await;
             if let Err(e) = streamer.stream_file(&file_path).await {
                 error!("播放文件失败: {}", e);
             }
@@ -150,25 +144,20 @@ impl VoiceManager {
 
     /// 停止播放
     pub async fn stop(&self) {
-        let inner = self.inner.lock().await;
-        if let Some(streamer) = &inner.audio_streamer {
-            let mut streamer = streamer.lock().await;
-            streamer.stop();
+        if let Some(streamer) = self.audio_streamer.lock().await.as_ref() {
+            streamer.lock().await.stop();
         }
     }
 
-    /// 获取当前频道 ID
+    /// 获取当前频道 ID（try_lock 快照，非阻塞）
     pub fn current_channel(&self) -> Option<String> {
-        // 同步快照：尝试获取锁，失败返回 None
-        self.inner.try_lock().ok().and_then(|g| g.current_channel.clone())
+        self.current_channel.try_lock().ok().and_then(|g| g.clone())
     }
 
     /// 检查是否正在播放
     pub async fn is_playing(&self) -> bool {
-        let inner = self.inner.lock().await;
-        if let Some(streamer) = &inner.audio_streamer {
-            let streamer = streamer.lock().await;
-            streamer.is_running()
+        if let Some(streamer) = self.audio_streamer.lock().await.as_ref() {
+            streamer.lock().await.is_running()
         } else {
             false
         }

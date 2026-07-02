@@ -70,7 +70,7 @@ impl Bot {
     pub fn new(config: BotConfig, api_client: KookClient) -> Self {
         // 清理 cookie 格式
         let netease_cookie = config.music.netease_cookie.as_ref()
-            .map(|c| Self::clean_cookie(c))
+            .map(|c| crate::common::utils::clean_cookie(c))
             .filter(|c| !c.is_empty());
         let netease_client = NeteaseClient::with_cookie(
             &config.music.netease_api_url,
@@ -85,7 +85,7 @@ impl Bot {
 
         // 创建 QQ 音乐客户端
         let qqmusic_cookie = config.music.qqmusic_cookie.as_ref()
-            .map(|c| Self::clean_cookie(c))
+            .map(|c| crate::common::utils::clean_cookie(c))
             .filter(|c| !c.is_empty());
         let qqmusic_client = QQMusicClient::with_cookie(
             &config.music.qqmusic_api_url,
@@ -100,7 +100,7 @@ impl Bot {
 
         // 创建 B站客户端
         let bilibili_cookie = config.music.bilibili_cookie.as_ref()
-            .map(|c| Self::clean_cookie(c))
+            .map(|c| crate::common::utils::clean_cookie(c))
             .filter(|c| !c.is_empty());
         let bilibili_client = BilibiliClient::with_cookie(
             &config.music.bilibili_api_url,
@@ -152,25 +152,6 @@ impl Bot {
         }
     }
 
-    /// 清理 cookie 字符串
-    fn clean_cookie(raw: &str) -> String {
-        raw.split(';')
-            .map(|s| s.trim())
-            .filter(|s| {
-                let s_lower = s.to_lowercase();
-                !s_lower.starts_with("max-age")
-                    && !s_lower.starts_with("expires")
-                    && !s_lower.starts_with("path=")
-                    && !s_lower.starts_with("domain=")
-                    && !s_lower.starts_with("secure")
-                    && !s_lower.starts_with("httponly")
-                    && !s_lower.starts_with("samesite")
-                    && !s.is_empty()
-            })
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-    
     /// 处理消息事件
     async fn handle_message(&self, data: &MessageData) {
         info!("========================================");
