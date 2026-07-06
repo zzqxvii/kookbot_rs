@@ -221,8 +221,13 @@ impl GatewayClient {
                 match try_decompress(&data) {
                     Ok(text) => {
                         debug!("[Gateway] 解压后消息: {}", text);
-                        if let Ok(gateway_msg) = serde_json::from_str::<GatewayMessage>(&text) {
-                            self.handle_gateway_message(gateway_msg).await;
+                        match serde_json::from_str::<GatewayMessage>(&text) {
+                            Ok(gateway_msg) => {
+                                self.handle_gateway_message(gateway_msg).await;
+                            }
+                            Err(e) => {
+                                warn!("[Gateway] 二进制消息 JSON 解析失败: {} — 原始: {}", e, &text[..text.len().min(200)]);
+                            }
                         }
                     }
                     Err(e) => {
