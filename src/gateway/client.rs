@@ -130,7 +130,8 @@ impl GatewayClient {
         while tokio::time::Instant::now() < hello_deadline {
             if let Some(msg) = self.receive_message().await {
                 self.handle_message(msg).await;
-                if self.heartbeat_interval.load(Ordering::Relaxed) > 0 {
+                // Kook Hello 不含 heartbeat_interval 字段，用 session_id 检测
+                if self.session_info.read().await.session_id.is_some() {
                     hello_received = true;
                     info!("✓ 收到 Hello 消息，连接正常");
                     break;
