@@ -40,7 +40,7 @@ impl From<&VoiceStreamingInfo> for StreamerConfig {
             bit_rate: info.bit_rate,
             sample_rate: info.sample_rate,
             channels: info.channels,
-            volume: 0.5,
+            volume: 1.0,
         }
     }
 }
@@ -301,6 +301,8 @@ impl FFmpegDirectStreamer {
                         error!("[FFmpeg] {}", line);
                     } else if line_lower.contains("warning") {
                         warn!("[FFmpeg] {}", line);
+                    } else {
+                        info!("[FFmpeg] {}", line);
                     }
                 }
             }
