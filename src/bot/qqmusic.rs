@@ -141,7 +141,6 @@ impl QQMusicCommand {
             None => return CommandResult::Error("加入语音频道失败".to_string()),
         };
         self.play_state.reset_stats();
-        self.play_state.set_playing(0);
 
         // ── 后台任务 ──
         let requester_name = ctx.data.extra.author.nickname.clone();
@@ -293,7 +292,7 @@ impl QQMusicCommand {
                     });
 
                     // 分块喂入 stdin，每块间检查切歌标志
-                    debug!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
+                    info!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
                     match std::fs::File::open(&file_path) {
                         Ok(mut f) => {
                             let mut hdr = [0u8; 10];
@@ -328,15 +327,18 @@ impl QQMusicCommand {
                                     break;
                                 }
                                 match std::io::Read::read(&mut f, &mut buf) {
-                                    Ok(0) => break,
+                                    Ok(0) => {
+                                        info!("[{}/{}] 文件读取完毕", idx + 1, total_count);
+                                        break;
+                                    }
                                     Ok(n) => {
                                         if std::io::Write::write_all(&mut stdin, &buf[..n]).is_err() {
-                                            error!("写入 stdin 失败");
+                                            error!("[{}/{}] 写入 stdin 失败", idx + 1, total_count);
                                             break;
                                         }
                                     }
                                     Err(e) => {
-                                        error!("读取文件失败: {}", e);
+                                        error!("[{}/{}] 读取文件失败: {}", idx + 1, total_count, e);
                                         break;
                                     }
                                 }

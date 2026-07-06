@@ -51,6 +51,14 @@ impl WyyCommand {
                 }
             };
 
+            // 先发静音包握手，建立 UDP 连接
+            if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                sock.connect((ip.as_str(), port)).ok();
+                let silence = [0xF8, 0xFF, 0xFE]; // Opus 静音帧
+                let _ = sock.send(&silence);
+                info!("🔇 已发送静音握手包到 {}:{}", ip, port);
+            }
+
             match streamer.start_stream_url(&file_path, &ip, port, streaming_info.rtcp_port) {
                 Ok(_) => {
                     let _ = streamer.wait();
@@ -116,7 +124,6 @@ impl WyyCommand {
         };
         let vc_id = vc.id.clone();
         self.play_state.reset_stats();
-        self.play_state.set_playing(0);
 
         // ── 后台任务 ──
         let requester_name = ctx.data.extra.author.nickname.clone();
@@ -267,7 +274,7 @@ impl WyyCommand {
                     });
 
                     // 分块喂入 stdin，每块间检查切歌标志
-                    debug!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
+                    info!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
                     match std::fs::File::open(&file_path) {
                         Ok(mut f) => {
                             let mut hdr = [0u8; 10];
@@ -297,20 +304,22 @@ impl WyyCommand {
                                     break;
                                 }
                                 match std::io::Read::read(&mut f, &mut buf) {
-                                    Ok(0) => break,
+                                    Ok(0) => {
+                                        info!("[{}/{}] 文件读取完毕", idx + 1, total_count);
+                                        break;
+                                    }
                                     Ok(n) => {
                                         if std::io::Write::write_all(&mut stdin, &buf[..n]).is_err() {
-                                            error!("写入 stdin 失败");
+                                            error!("[{}/{}] 写入 stdin 失败", idx + 1, total_count);
                                             break;
                                         }
                                     }
                                     Err(e) => {
-                                        error!("读取文件失败: {}", e);
+                                        error!("[{}/{}] 读取文件失败: {}", idx + 1, total_count, e);
                                         break;
                                     }
                                 }
                             }
-                            std::io::Write::flush(&mut stdin).ok();
                         }
                         Err(e) => {
                             error!("打开文件失败: {}: {}", file_path, e);

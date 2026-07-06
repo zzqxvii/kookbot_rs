@@ -95,7 +95,7 @@ impl FFmpegDirectStreamer {
         let pt = self.config.pt;
 
         let mut cmd = Command::new("ffmpeg");
-        cmd.args(["-re", "-loglevel", "warning", "-hide_banner"]);
+        cmd.args(["-re", "-loglevel", "info", "-hide_banner"]);
         cmd.args(input_args);
         cmd.args([
             "-map", "0:a:0",
@@ -126,10 +126,14 @@ impl FFmpegDirectStreamer {
             self.stop();
         }
 
-        info!("🎵 开始播放: {}", url);
+        let path = std::path::Path::new(url);
+        info!("🎵 开始播放: {} (存在: {}, 大小: {:?})", url, path.exists(), 
+            path.exists().then(|| std::fs::metadata(path).ok().map(|m| m.len())).flatten());
 
         let input_args = ["-i", url];
-        let mut child = self.build_rtp_command(dest_ip, dest_port, rtcp_port, &input_args)
+        let mut cmd = self.build_rtp_command(dest_ip, dest_port, rtcp_port, &input_args);
+        info!("[FFmpeg] 命令: ffmpeg {}", cmd.get_args().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
+        let mut child = cmd
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| BotError::IoError(e))?;
@@ -138,8 +142,8 @@ impl FFmpegDirectStreamer {
         info!("FFmpeg 进程已启动 (PID: {:?})", pid);
         self.play_state.set_playing(pid);
 
-        self.spawn_stderr_reader(&mut child);
         self.running.store(true, Ordering::Release);
+        self.spawn_stderr_reader(&mut child);
         self.process = Some(child);
         Ok(())
     }
@@ -173,11 +177,11 @@ impl FFmpegDirectStreamer {
         info!("FFmpeg stdin 进程已启动 (PID: {:?})", pid);
         self.play_state.set_playing(pid);
 
+        self.running.store(true, Ordering::Release);
         self.spawn_stderr_reader(&mut child);
 
         let stdin = child.stdin.take().expect("stdin should be piped");
 
-        self.running.store(true, Ordering::Release);
         self.process = Some(child);
         Ok(stdin)
     }
@@ -235,8 +239,8 @@ impl FFmpegDirectStreamer {
         info!("FFmpeg concat 进程已启动 (PID: {:?})", pid);
         self.play_state.set_playing(pid);
 
-        self.spawn_stderr_reader(&mut child);
         self.running.store(true, Ordering::Release);
+        self.spawn_stderr_reader(&mut child);
         self.process = Some(child);
         Ok(())
     }
@@ -254,13 +258,12 @@ impl FFmpegDirectStreamer {
         self.cleanup_concat_file();
     }
 
-    /// 等待推流结束（异步 — 通过 spawn_blocking 等待子进程退出）
-    pub async fn wait(&mut self) -> Result<()> {
+    /// 等待推流结束（同步 — 阻塞直到子进程退出）
+    pub fn wait(&mut self) -> Result<()> {
         if let Some(mut child) = self.process.take() {
-            let result = tokio::task::spawn_blocking(move || child.wait())
-                .await
-                .map_err(|e| BotError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-            result.map_err(|e| BotError::IoError(e))?;
+            info!("[FFmpeg] 等待进程退出...");
+            let status = child.wait().map_err(|e| BotError::IoError(e))?;
+            info!("[FFmpeg] 进程已退出，退出码: {:?}", status.code());
             self.running.store(false, Ordering::Release);
         }
         self.join_stderr_threads();

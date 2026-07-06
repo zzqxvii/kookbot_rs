@@ -192,7 +192,7 @@ impl AudioStreamer {
     /// 等待推流结束（异步）
     pub async fn wait(&mut self) -> Result<()> {
         if let Some(streamer) = &mut self.direct_streamer {
-            streamer.wait().await?;
+            streamer.wait()?;
         }
         self.running.store(false, Ordering::Release);
         Ok(())

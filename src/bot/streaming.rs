@@ -40,10 +40,12 @@ pub async fn join_voice_for_streaming(
         return None;
     }
 
-    info!("获取推流地址: {}:{}", ip, port);
-
     let bit_rate = conn_info.bitrate.unwrap_or(ctx.config.audio.bit_rate);
+    info!("获取推流地址: {}:{}, bitrate={}, ssrc={:?}, pt={:?}, rtcp_port={:?}, rtcp_mux={:?}", 
+        ip, port, bit_rate, conn_info.audio_ssrc, conn_info.audio_pt, conn_info.rtcp_port, conn_info.rtcp_mux);
+
     let streaming_info = VoiceStreamingInfo::from_conn(&conn_info, bit_rate);
+    info!("推流参数: ssrc={}, pt={}, bitrate={}", streaming_info.ssrc, streaming_info.pt, streaming_info.bit_rate);
 
     Some((ip, port as u16, streaming_info))
 }
