@@ -7,7 +7,7 @@ use crate::common::play_state::PlayState;
 use crate::player::VoiceStreamingInfo;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::RwLock;
+
 use tracing::{error, info, warn};
 
 /// 加入 Kook 语音频道并获取 RTP 推流信息。
@@ -16,8 +16,7 @@ pub async fn join_voice_for_streaming(
     channel_id: &str,
     text_channel: &str,
 ) -> Option<(String, u16, VoiceStreamingInfo)> {
-    let api_guard = ctx.api_client.read().await;
-    let api_client = api_guard.as_ref()?;
+    let api_client = &ctx.api_client;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     let conn_info = match api_client.join_voice_channel(channel_id).await {
@@ -104,24 +103,22 @@ pub async fn feed_file_to_stdin(
 ///
 /// 删除播放卡片、发送完成/错误消息、离开语音频道。
 pub async fn send_playlist_cleanup(
-    api_client: &Arc<RwLock<Option<crate::api::KookClient>>>,
+    api_client: &crate::api::KookClient,
     channel_id: &str,
     vc_id: &str,
     play_state: &Arc<PlayState>,
     success_msg: &str,
     error_msg: Option<&str>,
 ) {
-    if let Some(client) = api_client.read().await.as_ref() {
-        if let Some(old) = play_state.take_play_msg_id() {
-            let _ = client.delete_message(&old).await;
-        }
-        if !play_state.is_stop_requested() {
-            if let Some(err) = error_msg {
-                let _ = client.send_channel_message(channel_id, &format!("❌ 播放出错: {}", err)).await;
-            } else {
-                let _ = client.send_channel_message(channel_id, success_msg).await;
-            }
-        }
-        let _ = client.leave_voice_channel(vc_id).await;
+    if let Some(old) = play_state.take_play_msg_id() {
+        let _ = api_client.delete_message(&old).await;
     }
+    if !play_state.is_stop_requested() {
+        if let Some(err) = error_msg {
+            let _ = api_client.send_channel_message(channel_id, &format!("❌ 播放出错: {}", err)).await;
+        } else {
+            let _ = api_client.send_channel_message(channel_id, success_msg).await;
+        }
+    }
+    let _ = api_client.leave_voice_channel(vc_id).await;
 }

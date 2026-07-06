@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 use crate::common::play_state::PlayState;
@@ -87,18 +87,14 @@ impl BilibiliCommand {
         let user_id = &ctx.data.author_id;
 
         let voice_channel = {
-            if let Some(api_client) = ctx.api_client.read().await.as_ref() {
-                match api_client.get_user_voice_channel(guild_id, user_id).await {
-                    Ok(ch) => ch,
-                    Err(e) => {
-                        return CommandResult::Error(format!(
-                            "获取语音频道信息失败: {}",
-                            e
-                        ));
-                    }
+            match ctx.api_client.get_user_voice_channel(guild_id, user_id).await {
+                Ok(ch) => ch,
+                Err(e) => {
+                    return CommandResult::Error(format!(
+                        "获取语音频道信息失败: {}",
+                        e
+                    ));
                 }
-            } else {
-                return CommandResult::Error("API 客户端不可用".to_string());
             }
         };
 
@@ -159,29 +155,29 @@ impl BilibiliCommand {
                 .await;
 
                 // 发送播放卡片
-                if let Some(api_client) = ctx.api_client.read().await.as_ref() {
-                    use crate::common::card::{
-                        build_play_card, PlayCardData, PlayMusic, Sender as CardSender,
-                    };
+                
+                use crate::common::card::{
+                    build_play_card, PlayCardData, PlayMusic, Sender as CardSender,
+                };
 
-                    let card_data = PlayCardData::new(PlayMusic {
-                        title: music.title.clone(),
-                        author: music.author.clone(),
-                        platform: music.platform.clone(),
-                        pic_url: music.pic_url.clone(),
-                        sender: CardSender {
-                            nick_name: ctx.data.extra.author.nickname.clone(),
-                            avatar_url: None,
-                        },
-                    });
+                let card_data = PlayCardData::new(PlayMusic {
+                    title: music.title.clone(),
+                    author: music.author.clone(),
+                    platform: music.platform.clone(),
+                    pic_url: music.pic_url.clone(),
+                    sender: CardSender {
+                        nick_name: ctx.data.extra.author.nickname.clone(),
+                        avatar_url: None,
+                    },
+                });
 
-                    let card_json = build_play_card(&card_data);
-                    if let Ok(msg_id) =
-                        api_client.send_card_message(channel_id, &card_json).await
-                    {
-                        self.play_state.set_play_msg_id(msg_id);
-                    }
+                let card_json = build_play_card(&card_data);
+                if let Ok(msg_id) =
+                    ctx.api_client.send_card_message(channel_id, &card_json).await
+                {
+                    self.play_state.set_play_msg_id(msg_id);
                 }
+            
 
                 // 加入语音频道并播放
                 if let Some((ip, port, streaming_info)) = crate::bot::streaming::join_voice_for_streaming(ctx, &vc.id, channel_id)
@@ -198,14 +194,11 @@ impl BilibiliCommand {
                         let _ = handle.await;
                         info!("B站单曲播放完成");
 
-                        if let Some(client) = api_client.read().await.as_ref() {
-                            if let Some(msg_id) = play_state.take_play_msg_id() {
-                                let _ = client.delete_message(&msg_id).await;
-                            }
-                            let _ = client.leave_voice_channel(&vc_id).await;
-                        } else {
-                            warn!("B站单曲播放完成，但 API 客户端不可用，无法清理");
+                        
+                        if let Some(msg_id) = play_state.take_play_msg_id() {
+                            let _ = api_client.delete_message(&msg_id).await;
                         }
+                        let _ = api_client.leave_voice_channel(&vc_id).await;
                     });
 
                     CommandResult::Ok

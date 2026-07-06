@@ -1,9 +1,12 @@
 use crate::core::error::{BotError, Result};
 use crate::player::{Music, Sender};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::time::Duration;
-use tracing::info;
+use tokio::io::AsyncWriteExt;
+use tracing::{info, warn};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -12,6 +15,7 @@ pub struct BilibiliClient {
     http: Client,
     base_url: String,
     cookie: Option<String>,
+    cache_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -40,6 +44,8 @@ static URL_PATTERNS: LazyLock<[Regex; 3]> = LazyLock::new(|| [
 impl BilibiliClient {
     pub fn new(base_url: &str) -> Self {
         let http = Client::builder()
+            .user_agent("Mozilla/5.0 (compatible; RKM-Bot/1.0)")
+            .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()
             .expect("创建 HTTP 客户端失败");
@@ -48,6 +54,7 @@ impl BilibiliClient {
             http,
             base_url: base_url.to_string(),
             cookie: None,
+            cache_dir: PathBuf::from("./cache"),
         }
     }
 
@@ -63,6 +70,11 @@ impl BilibiliClient {
 
     pub fn has_cookie(&self) -> bool {
         self.cookie.as_deref().map_or(false, |c| !c.is_empty())
+    }
+
+    /// 设置缓存目录
+    pub fn set_cache_dir(&mut self, dir: impl Into<PathBuf>) {
+        self.cache_dir = dir.into();
     }
 
     /// 添加 cookie 到请求头
@@ -122,15 +134,21 @@ impl BilibiliClient {
         let songs: Vec<BilibiliSong> = json
             .get("data")
             .and_then(|d| d.get("list"))
-            .and_then(|l| serde_json::from_value(l.clone()).ok())
+            .and_then(|l| serde_json::from_value(l.clone()).map_err(|e| {
+                warn!("B站搜索结果解析失败 (data.list): {}", e);
+            }).ok())
             .or_else(|| {
                 json.get("result")
                     .and_then(|r| r.get("list"))
-                    .and_then(|l| serde_json::from_value(l.clone()).ok())
+                    .and_then(|l| serde_json::from_value(l.clone()).map_err(|e| {
+                        warn!("B站搜索结果解析失败 (result.list): {}", e);
+                    }).ok())
             })
             .or_else(|| {
                 json.get("data")
-                    .and_then(|d| serde_json::from_value(d.clone()).ok())
+                    .and_then(|d| serde_json::from_value(d.clone()).map_err(|e| {
+                        warn!("B站搜索结果解析失败 (data): {}", e);
+                    }).ok())
             })
             .unwrap_or_default();
 
@@ -211,16 +229,15 @@ impl BilibiliClient {
 
     /// 下载歌曲到临时文件
     pub async fn download_song(&self, url: &str, bvid: &str) -> Result<String> {
-        let cache_dir = std::path::Path::new("./cache");
-        if !cache_dir.exists() {
-            std::fs::create_dir_all(cache_dir)?;
+        if !self.cache_dir.exists() {
+            tokio::fs::create_dir_all(&self.cache_dir).await?;
         }
 
-        let file_path = cache_dir.join(format!("bili_{}.mp3", bvid));
+        let file_path = self.cache_dir.join(format!("bili_{}.mp3", bvid));
 
         // 如果已存在且大于 1KB，直接返回
         if file_path.exists() {
-            if let Ok(meta) = std::fs::metadata(&file_path) {
+            if let Ok(meta) = tokio::fs::metadata(&file_path).await {
                 if meta.len() > 1024 {
                     info!("B站歌曲已缓存: {:?}", file_path);
                     return Ok(file_path.to_string_lossy().to_string());
@@ -240,10 +257,15 @@ impl BilibiliClient {
             });
         }
 
-        let bytes = response.bytes().await?;
-        std::fs::write(&file_path, &bytes)?;
+        let mut file = tokio::fs::File::create(&file_path).await?;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
 
-        info!("B站歌曲下载完成: {} bytes", bytes.len());
+        info!("B站歌曲下载完成: {:?}", file_path);
         Ok(file_path.to_string_lossy().to_string())
     }
 

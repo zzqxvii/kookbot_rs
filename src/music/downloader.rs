@@ -44,7 +44,9 @@ impl MusicDownloader {
         url: &str,
         filename: &str,
     ) -> Result<PathBuf> {
-        let target_path = self.cache_dir.join(filename);
+        // 消毒文件名：去除目录分隔符和父目录引用
+        let safe_name = filename.replace('/', "_").replace('\\', "_").replace("..", "_");
+        let target_path = self.cache_dir.join(&safe_name);
 
         // 检查是否已缓存
         if target_path.exists() {
@@ -61,7 +63,13 @@ impl MusicDownloader {
         fs::create_dir_all(&self.cache_dir).await
             .map_err(|e| BotError::IoError(e))?;
 
-        info!("开始下载: {} -> {:?}", url, target_path);
+        // 先下载到 .part 文件，防止部分下载的文件被当作缓存命中
+        let part_path = target_path.with_extension("part");
+        if part_path.exists() {
+            tokio::fs::remove_file(&part_path).await.ok();
+        }
+
+        info!("开始下载: {} -> {:?}", url, part_path);
 
         // 发送请求
         let response = self.http.get(url)
@@ -80,8 +88,8 @@ impl MusicDownloader {
         // 获取总大小
         let total_size = response.content_length();
 
-        // 下载并写入文件
-        let mut file = fs::File::create(&target_path).await
+        // 下载并写入 .part 文件
+        let mut file = fs::File::create(&part_path).await
             .map_err(|e| BotError::IoError(e))?;
 
         let mut stream = response.bytes_stream();
@@ -101,6 +109,10 @@ impl MusicDownloader {
         }
 
         file.flush().await.map_err(|e| BotError::IoError(e))?;
+
+        // 成功后原子性地将 .part 重命名为最终文件名
+        tokio::fs::rename(&part_path, &target_path).await
+            .map_err(|e| BotError::IoError(e))?;
 
         info!("下载完成: {:?} ({} 字节)", target_path, downloaded);
         Ok(target_path)

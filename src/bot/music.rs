@@ -94,20 +94,14 @@ impl WyyCommand {
 
 
         // 发送歌单信息
-        if let Some(client) = ctx.api_client.read().await.as_ref() {
-            let msg = format!("📋 **歌单：{}**", playlist_name);
-            let _ = client.send_channel_message(channel_id, &msg).await;
-        }
+        let msg = format!("📋 **歌单：{}**", playlist_name);
+        let _ = ctx.api_client.send_channel_message(channel_id, &msg).await;
 
         // 获取用户语音频道
         let voice_channel = {
-            if let Some(client) = ctx.api_client.read().await.as_ref() {
-                match client.get_user_voice_channel(guild_id, user_id).await {
-                    Ok(ch) => ch,
-                    Err(e) => return CommandResult::Error(format!("获取语音频道失败: {}", e)),
-                }
-            } else {
-                return CommandResult::Error("API 客户端不可用".to_string());
+            match ctx.api_client.get_user_voice_channel(guild_id, user_id).await {
+                Ok(ch) => ch,
+                Err(e) => return CommandResult::Error(format!("获取语音频道失败: {}", e)),
             }
         };
         let vc = match voice_channel {
@@ -122,6 +116,7 @@ impl WyyCommand {
         };
         let vc_id = vc.id.clone();
         self.play_state.reset_stats();
+        self.play_state.set_playing(0);
 
         // ── 后台任务 ──
         let requester_name = ctx.data.extra.author.nickname.clone();
@@ -137,6 +132,7 @@ impl WyyCommand {
             let vc_cleanup = vc_id.clone();
 
 
+            let rt_outer = tokio::runtime::Handle::current();
             let result = tokio::task::spawn_blocking(move || {
                 use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
                 use std::sync::Mutex;
@@ -208,63 +204,66 @@ impl WyyCommand {
                         let nf = next_file.clone();
                         let nc = netease_client.clone();
                         let next_tid = track_ids[idx + 1];
-                        let rt2 = rt.clone();
-                        std::thread::spawn(move || {
-                            let result = rt2.block_on(async {
-                                let netease = nc.read().await;
-                                let url = netease.get_song_url(next_tid).await.ok().flatten()?;
+                        let rt_outer = rt_outer.clone();
+                        rt_outer.spawn(async move {
+                            let netease = nc.read().await;
+                            let result = if let Some(url) = netease.get_song_url(next_tid).await.ok().flatten() {
                                 netease.download_song(&url, next_tid).await.ok()
-                            });
-                            *nf.lock().unwrap() = Some(result);
+                            } else {
+                                None
+                            };
+                            if let Ok(mut guard) = nf.lock() {
+                                *guard = Some(result);
+                            }
                         });
                     }
 
                     // 更新卡片
                     rt.block_on(async {
-                        if let Some(client) = api_client.read().await.as_ref() {
-                            let netease = netease_client.read().await;
-                            let tid = track_ids[idx];
-                            if let Ok(song) = netease.get_song_detail(tid).await {
-                                let music = netease.to_music(&song);
-                                play_state.set_current_song_duration(music.duration.unwrap_or(0));
-                                use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
-                                let mut data = PlayCardData::new(PlayMusic {
-                                    title: music.title,
-                                    author: music.author,
-                                    platform: music.platform,
-                                    pic_url: music.pic_url,
-                                    sender: CardSender {
-                                        nick_name: requester_name.clone(),
-                                        avatar_url: None,
-                                    },
-                                });
-                                let remaining = total_count.saturating_sub(idx + 1);
-                                let mut queue = Vec::new();
-                                if remaining > 0 {
-                                    for i in 1..=2.min(remaining) {
-                                        let next_tid = track_ids[idx + i];
-                                        if let Ok(next_song) = netease.get_song_detail(next_tid).await {
-                                            let author = next_song.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
-                                            queue.push(QueueMusic {
-                                                title: next_song.name.clone(),
-                                                author,
-                                                platform: "网易云".to_string(),
-                                                pic_url: next_song.album.pic_url.clone(),
-                                                sender: CardSender { nick_name: "".to_string(), avatar_url: None },
-                                            });
-                                        }
+                        
+                        let netease = netease_client.read().await;
+                        let tid = track_ids[idx];
+                        if let Ok(song) = netease.get_song_detail(tid).await {
+                            let music = netease.to_music(&song);
+                            play_state.set_current_song_duration(music.duration.unwrap_or(0));
+                            use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
+                            let mut data = PlayCardData::new(PlayMusic {
+                                title: music.title,
+                                author: music.author,
+                                platform: music.platform,
+                                pic_url: music.pic_url,
+                                sender: CardSender {
+                                    nick_name: requester_name.clone(),
+                                    avatar_url: None,
+                                },
+                            });
+                            let remaining = total_count.saturating_sub(idx + 1);
+                            let mut queue = Vec::new();
+                            if remaining > 0 {
+                                for i in 1..=2.min(remaining) {
+                                    let next_tid = track_ids[idx + i];
+                                    if let Ok(next_song) = netease.get_song_detail(next_tid).await {
+                                        let author = next_song.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+                                        queue.push(QueueMusic {
+                                            title: next_song.name.clone(),
+                                            author,
+                                            platform: "网易云".to_string(),
+                                            pic_url: next_song.album.pic_url.clone(),
+                                            sender: CardSender { nick_name: "".to_string(), avatar_url: None },
+                                        });
                                     }
                                 }
-                                data = data.with_queue(queue, remaining);
-                                let json = build_play_card(&data);
+                            }
+                            data = data.with_queue(queue, remaining);
+                            let json = build_play_card(&data);
+                            if let Ok(msg_id) = api_client.send_card_message(&channel_id, &json).await {
                                 if let Some(old) = play_state.take_play_msg_id() {
-                                    let _ = client.delete_message(&old).await;
+                                    let _ = api_client.delete_message(&old).await;
                                 }
-                                if let Ok(msg_id) = client.send_card_message(&channel_id, &json).await {
-                                    play_state.set_play_msg_id(msg_id);
-                                }
+                                play_state.set_play_msg_id(msg_id);
                             }
                         }
+                    
                     });
 
                     // 分块喂入 stdin，每块间检查切歌标志
@@ -275,11 +274,14 @@ impl WyyCommand {
                             if std::io::Read::read_exact(&mut f, &mut hdr).is_ok()
                                 && &hdr[0..3] == b"ID3"
                             {
-                                let skip = 10
-                                    + ((hdr[6] as u64 & 0x7F) << 21)
-                                    + ((hdr[7] as u64 & 0x7F) << 14)
-                                    + ((hdr[8] as u64 & 0x7F) << 7)
-                                    + (hdr[9] as u64 & 0x7F);
+                                let major_version = hdr[3];
+                                let skip = if major_version == 2 {
+                                    // ID3v2.2: 3 字节大端序大小
+                                    10 + ((hdr[6] as u64) << 16) + ((hdr[7] as u64) << 8) + (hdr[8] as u64)
+                                } else {
+                                    // ID3v2.3/2.4: 4 字节 synchsafe 大小
+                                    10 + ((hdr[6] as u64 & 0x7F) << 21) + ((hdr[7] as u64 & 0x7F) << 14) + ((hdr[8] as u64 & 0x7F) << 7) + (hdr[9] as u64 & 0x7F)
+                                };
                                 std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip)).ok();
                             } else {
                                 std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).ok();
@@ -328,20 +330,20 @@ impl WyyCommand {
                 Ok(Err(e)) => Some(e.clone()),
                 Err(e) => Some(format!("播放线程异常: {}", e)),
             };
-            if let Some(client) = api_cleanup.read().await.as_ref() {
-                if let Some(old) = ps_cleanup.take_play_msg_id() {
-                    let _ = client.delete_message(&old).await;
-                }
-                if !ps_cleanup.is_stop_requested() {
-                    if let Some(err) = &playback_err {
-                        let _ = client.send_channel_message(&ch_cleanup, &format!("❌ 播放出错: {}", err)).await;
-                    } else {
-                        let _ = client.send_channel_message(&ch_cleanup,
-                            &format!("✅ 歌单 **{}** 播放完成", playlist_name)).await;
-                    }
-                }
-                let _ = client.leave_voice_channel(&vc_cleanup).await;
+            
+            if let Some(old) = ps_cleanup.take_play_msg_id() {
+                let _ = api_cleanup.delete_message(&old).await;
             }
+            if !ps_cleanup.is_stop_requested() {
+                if let Some(err) = &playback_err {
+                    let _ = api_cleanup.send_channel_message(&ch_cleanup, &format!("❌ 播放出错: {}", err)).await;
+                } else {
+                    let _ = api_cleanup.send_channel_message(&ch_cleanup,
+                        &format!("✅ 歌单 **{}** 播放完成", playlist_name)).await;
+                }
+            }
+            let _ = api_cleanup.leave_voice_channel(&vc_cleanup).await;
+        
             ps_cleanup.reset_stats();
             info!("歌单播放完成");
         });
@@ -360,15 +362,11 @@ impl WyyCommand {
         
         // 获取用户语音频道
         let voice_channel = {
-            if let Some(client) = ctx.api_client.read().await.as_ref() {
-                match client.get_user_voice_channel(guild_id, user_id).await {
-                    Ok(ch) => ch,
-                    Err(e) => {
-                        return CommandResult::Error(format!("获取语音频道信息失败: {}", e));
-                    }
+            match ctx.api_client.get_user_voice_channel(guild_id, user_id).await {
+                Ok(ch) => ch,
+                Err(e) => {
+                    return CommandResult::Error(format!("获取语音频道信息失败: {}", e));
                 }
-            } else {
-                return CommandResult::Error("API 客户端不可用".to_string());
             }
         };
         
@@ -414,31 +412,32 @@ impl WyyCommand {
                         drop(netease); // 释放锁
                         
                         // 发送播放卡片
-                        if let Some(client) = ctx.api_client.read().await.as_ref() {
-                            use crate::common::card::{build_play_card, PlayCardData, PlayMusic, Sender as CardSender};
-                            
-                            let card_data = PlayCardData::new(PlayMusic {
-                                title: music.title.clone(),
-                                author: music.author.clone(),
-                                platform: music.platform.clone(),
-                                pic_url: music.pic_url.clone(),
-                                sender: CardSender {
-                                    nick_name: ctx.data.extra.author.nickname.clone(),
-                                    avatar_url: None,
-                                },
-                            });
-                            
-                            let card_json = build_play_card(&card_data);
-                            if let Ok(msg_id) = client.send_card_message(channel_id, &card_json).await {
-                                self.play_state.set_play_msg_id(msg_id);
-                            }
+                        
+                        use crate::common::card::{build_play_card, PlayCardData, PlayMusic, Sender as CardSender};
+                        
+                        let card_data = PlayCardData::new(PlayMusic {
+                            title: music.title.clone(),
+                            author: music.author.clone(),
+                            platform: music.platform.clone(),
+                            pic_url: music.pic_url.clone(),
+                            sender: CardSender {
+                                nick_name: ctx.data.extra.author.nickname.clone(),
+                                avatar_url: None,
+                            },
+                        });
+                        
+                        let card_json = build_play_card(&card_data);
+                        if let Ok(msg_id) = ctx.api_client.send_card_message(channel_id, &card_json).await {
+                            self.play_state.set_play_msg_id(msg_id);
                         }
+                    
                         
                         // 记录歌曲时长，用于进度显示
                         self.play_state.set_current_song_duration(music.duration.unwrap_or(0));
                         
                         // 加入语音频道并播放
                         if let Some((ip, port, streaming_info)) = crate::bot::streaming::join_voice_for_streaming(ctx, &vc.id, channel_id).await {
+                            self.play_state.set_playing(0);
                             let handle = self.play_song(local_file, ip, port, streaming_info).await;
                             
                             let api_client = ctx.api_client.clone();
@@ -449,12 +448,12 @@ impl WyyCommand {
                                 let _ = handle.await;
                                 info!("单曲播放完成");
                                 
-                                if let Some(client) = api_client.read().await.as_ref() {
-                                    if let Some(msg_id) = play_state.take_play_msg_id() {
-                                        let _ = client.delete_message(&msg_id).await;
-                                    }
-                                    let _ = client.leave_voice_channel(&vc_id).await;
+                                
+                                if let Some(msg_id) = play_state.take_play_msg_id() {
+                                    let _ = api_client.delete_message(&msg_id).await;
                                 }
+                                let _ = api_client.leave_voice_channel(&vc_id).await;
+                            
                             });
                             
                             CommandResult::Ok
@@ -471,7 +470,7 @@ impl WyyCommand {
                 }
             }
             Err(e) => {
-                CommandResult::Error(format!("搜索失败: {}", e))
+                CommandResult::Error(format!("{}", e))
             }
         }
     }

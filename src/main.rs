@@ -82,25 +82,34 @@ async fn run_bot(config_path: Option<PathBuf>) -> Result<()> {
         manager
     };
 
-    check_netease_api(&config.music.netease_api_url).await?;
+    if let Err(e) = check_netease_api(&config.music.netease_api_url).await {
+        warn!("网易云API不可用: {}，网易云功能将不可用", e);
+    }
+
+    // 运行 Bot，捕获错误，最后总是执行后端清理
+    let result = run_bot_inner(config, &backend_manager).await;
+    backend_manager.shutdown().await;
+    result
+}
+
+async fn run_bot_inner(config: BotConfig, _backend_manager: &kook_music_bot::common::backend::ApiBackendManager) -> Result<()> {
     cleanup_cache(&config.music.cache_dir, config.music.max_cache_size_mb).await?;
     
     let api_client = KookClient::new(&config)?;
     display_bot_info(&api_client).await;
     display_guilds(&api_client).await;
     
-    let (bot, ws_handler, webhook_handler) = create_bot(config.clone(), api_client.clone());
+    let (bot, _ws_handler, webhook_handler) = create_bot(config.clone(), api_client.clone());
     
     match config.mode {
         ConnectionMode::Webhook => {
             start_webhook_mode(config, webhook_handler).await?;
         }
         ConnectionMode::Websocket => {
-            start_websocket_mode(config, bot, ws_handler).await?;
+            start_websocket_mode(config, bot).await?;
         }
     }
     
-    backend_manager.shutdown().await;
     Ok(())
 }
 
@@ -269,7 +278,6 @@ async fn start_webhook_mode(config: BotConfig, handler: BotWebhookHandler) -> Re
 async fn start_websocket_mode(
     config: BotConfig,
     bot: Arc<Bot>,
-    _handler: BotEventHandler,
 ) -> Result<()> {
     box_title!("🚀 启动 WebSocket 连接");
 
@@ -278,13 +286,7 @@ async fn start_websocket_mode(
     loop {
         let gateway_url = {
             let api_client = bot.api_client();
-            let guard = api_client.read().await;
-            let Some(client) = guard.as_ref() else {
-                error!("API 客户端不可用，5秒后重试");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                continue;
-            };
-            match client.get_gateway_url().await {
+            match api_client.get_gateway_url().await {
                 Ok(url) => url,
                 Err(e) => {
                     error!("获取 Gateway URL 失败: {}", e);

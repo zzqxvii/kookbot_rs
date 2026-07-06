@@ -12,6 +12,7 @@ pub struct QQMusicClient {
     http: Client,
     base_url: String,
     cookie: Option<String>,
+    cache_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +71,7 @@ impl QQMusicClient {
             http,
             base_url: base_url.to_string(),
             cookie: None,
+            cache_dir: String::from("./cache"),
         }
     }
 
@@ -85,6 +87,11 @@ impl QQMusicClient {
 
     pub fn has_cookie(&self) -> bool {
         self.cookie.as_deref().map_or(false, |c| !c.is_empty())
+    }
+
+    /// 设置缓存目录
+    pub fn set_cache_dir(&mut self, dir: String) {
+        self.cache_dir = dir;
     }
 
     /// 添加 cookie 到请求头
@@ -344,7 +351,7 @@ impl QQMusicClient {
 
     /// 下载歌曲到临时文件
     pub async fn download_song(&self, url: &str, song_id: u64) -> Result<String> {
-        let cache_dir = std::path::Path::new("./cache");
+        let cache_dir = std::path::Path::new(&self.cache_dir);
         if !cache_dir.exists() {
             std::fs::create_dir_all(cache_dir)?;
         }

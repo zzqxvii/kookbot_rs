@@ -54,7 +54,7 @@ pub struct Bot {
     /// Bot 配置
     config: BotConfig,
     /// API 客户端
-    api_client: Arc<RwLock<Option<KookClient>>>,
+    api_client: Arc<KookClient>,
     /// 命令路由器
     command_router: CommandRouter,
     /// 播放状态
@@ -63,6 +63,8 @@ pub struct Bot {
     netease_client: Arc<RwLock<NeteaseClient>>,
     /// 语音管理器
     voice_manager: Arc<Mutex<Option<VoiceManager>>>,
+    /// 当前语音频道 ID（用于停止按钮离开频道）
+    voice_channel_id: Arc<Mutex<Option<String>>>,
 }
 
 impl Bot {
@@ -72,11 +74,12 @@ impl Bot {
         let netease_cookie = config.music.netease_cookie.as_ref()
             .map(|c| crate::common::utils::clean_cookie(c))
             .filter(|c| !c.is_empty());
-        let netease_client = NeteaseClient::with_cookie(
+        let mut netease_client = NeteaseClient::with_cookie(
             &config.music.netease_api_url,
             netease_cookie,
         );
         
+        netease_client.set_cache_dir(config.music.cache_dir.clone());
         if netease_client.has_cookie() {
             info!("已加载网易云登录凭证");
         } else {
@@ -87,11 +90,12 @@ impl Bot {
         let qqmusic_cookie = config.music.qqmusic_cookie.as_ref()
             .map(|c| crate::common::utils::clean_cookie(c))
             .filter(|c| !c.is_empty());
-        let qqmusic_client = QQMusicClient::with_cookie(
+        let mut qqmusic_client = QQMusicClient::with_cookie(
             &config.music.qqmusic_api_url,
             qqmusic_cookie,
         );
 
+        qqmusic_client.set_cache_dir(config.music.cache_dir.clone());
         if qqmusic_client.has_cookie() {
             info!("已加载QQ音乐登录凭证");
         } else {
@@ -102,11 +106,12 @@ impl Bot {
         let bilibili_cookie = config.music.bilibili_cookie.as_ref()
             .map(|c| crate::common::utils::clean_cookie(c))
             .filter(|c| !c.is_empty());
-        let bilibili_client = BilibiliClient::with_cookie(
+        let mut bilibili_client = BilibiliClient::with_cookie(
             &config.music.bilibili_api_url,
             bilibili_cookie,
         );
 
+        bilibili_client.set_cache_dir(config.music.cache_dir.clone());
         if bilibili_client.has_cookie() {
             info!("已加载B站登录凭证");
         } else {
@@ -144,12 +149,18 @@ impl Bot {
 
         Self {
             config,
-            api_client: Arc::new(RwLock::new(Some(api_client))),
+            api_client: Arc::new(api_client),
             command_router,
             play_state,
             netease_client: netease_client_arc,
             voice_manager: Arc::new(Mutex::new(None)),
+            voice_channel_id: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 设置当前语音频道 ID（供流式播放模块在加入语音时调用）
+    pub async fn set_voice_channel_id(&self, vc_id: String) {
+        *self.voice_channel_id.lock().await = Some(vc_id);
     }
 
     /// 处理消息事件
@@ -175,24 +186,20 @@ impl Bot {
                     debug!("命令执行成功");
                 }
                 CommandResult::Error(msg) => {
-                    if let Some(client) = self.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(
-                            channel_id,
-                            &format!("❌ {}", msg)
-                        ).await;
-                    }
+                    let _ = self.api_client.send_channel_message(
+                        channel_id,
+                        &format!("❌ {}", msg)
+                    ).await;
                 }
                 CommandResult::Reply(msg) => {
-                    if let Some(client) = self.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(channel_id, &msg).await;
-                    }
+                    let _ = self.api_client.send_channel_message(channel_id, &msg).await;
                 }
             }
         }
     }
     
     /// 获取 API 客户端
-    pub fn api_client(&self) -> Arc<RwLock<Option<KookClient>>> {
+    pub fn api_client(&self) -> Arc<KookClient> {
         self.api_client.clone()
     }
     
@@ -259,12 +266,10 @@ impl EventHandler for BotEventHandler {
             && (value == "stop" || value == "nextMusic")
         {
             info!("[Bot] 非管理员用户 {} 尝试执行 {}", user_id, value);
-            if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                let _ = client.send_channel_message(
-                    channel_id,
-                    "⚠️ 仅管理员可执行此操作"
-                ).await;
-            }
+            let _ = self.bot.api_client.send_channel_message(
+                channel_id,
+                "⚠️ 仅管理员可执行此操作"
+            ).await;
             return;
         }
 
@@ -276,20 +281,16 @@ impl EventHandler for BotEventHandler {
                 if self.bot.play_state.is_playing() {
                     self.bot.play_state.request_next();
                     
-                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(
-                            channel_id,
-                            &format!("⏭️ 用户 **{}** 点击了下一首", user_display)
-                        ).await;
-                    }
+                    let _ = self.bot.api_client.send_channel_message(
+                        channel_id,
+                        &format!("⏭️ 用户 **{}** 点击了下一首", user_display)
+                    ).await;
                 } else {
                     info!("[Bot] 当前没有正在播放的歌曲");
-                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(
-                            channel_id,
-                            "⚠️ 当前没有正在播放的歌曲"
-                        ).await;
-                    }
+                    let _ = self.bot.api_client.send_channel_message(
+                        channel_id,
+                        "⚠️ 当前没有正在播放的歌曲"
+                    ).await;
                 }
             }
             "stop" => {
@@ -298,38 +299,33 @@ impl EventHandler for BotEventHandler {
 
                 if self.bot.play_state.is_playing() {
                     self.bot.play_state.request_stop();
-                    let killed = self.bot.play_state.kill_process();
-                    info!("[Bot] 进程已终止: {}", killed);
+                    if !self.bot.play_state.kill_process() {
+                        warn!("终止播放进程失败");
+                    }
 
                     // 删除播放卡片
-                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        if let Some(old_msg_id) = self.bot.play_state.take_play_msg_id() {
-                            let _ = client.delete_message(&old_msg_id).await;
-                        }
+                    if let Some(old_msg_id) = self.bot.play_state.take_play_msg_id() {
+                        let _ = self.bot.api_client.delete_message(&old_msg_id).await;
                     }
 
                     // 离开语音频道
-                    let mut vm = self.bot.voice_manager.lock().await;
-                    if let Some(voice_manager) = vm.as_ref() {
-                        let _ = voice_manager.leave_channel().await;
-                        *vm = None;
+                    let vc_id = self.bot.voice_channel_id.lock().await.take();
+                    if let Some(vc_id) = &vc_id {
+                        let _ = self.bot.api_client.leave_voice_channel(vc_id).await;
+                        info!("[Bot] 已离开语音频道: {}", vc_id);
                     }
 
                     // 发送停止确认消息
-                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(
-                            channel_id,
-                            &format!("⏹️ 用户 **{}** 停止了播放", user_display)
-                        ).await;
-                    }
+                    let _ = self.bot.api_client.send_channel_message(
+                        channel_id,
+                        &format!("⏹️ 用户 **{}** 停止了播放", user_display)
+                    ).await;
                 } else {
                     info!("[Bot] 当前没有正在播放的歌曲");
-                    if let Some(client) = self.bot.api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(
-                            channel_id,
-                            "⚠️ 当前没有正在播放的歌曲"
-                        ).await;
-                    }
+                    let _ = self.bot.api_client.send_channel_message(
+                        channel_id,
+                        "⚠️ 当前没有正在播放的歌曲"
+                    ).await;
                 }
             }
             _ => {
@@ -400,10 +396,12 @@ impl crate::webhook::WebhookHandler for BotWebhookHandler {
             }
             1 => {
                 // 解析为 MessageData 并处理
-                if let Ok(msg_data) = serde_json::from_value::<MessageData>(data) {
+                if let Ok(msg_data) = serde_json::from_value::<MessageData>(data.clone()) {
                     if msg_data.is_text() || msg_data.is_kmarkdown() {
                         self.bot.handle_message(&msg_data).await;
                     }
+                } else {
+                    warn!("[Webhook] 消息解析失败: {}", data);
                 }
             }
             _ => {

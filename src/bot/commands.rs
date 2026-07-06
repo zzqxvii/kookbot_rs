@@ -44,7 +44,7 @@ pub struct CommandContext<'a> {
     /// 命令参数
     pub args: Vec<&'a str>,
     /// API 客户端
-    pub api_client: Arc<RwLock<Option<KookClient>>>,
+    pub api_client: Arc<KookClient>,
     /// Bot 配置
     pub config: &'a BotConfig,
     /// 播放状态
@@ -55,35 +55,6 @@ pub struct CommandContext<'a> {
     pub voice_manager: Arc<Mutex<Option<VoiceManager>>>,
 }
 
-/// 后台任务上下文 — 可 Clone 的共享状态集合
-///
-/// 消除 spawn 任务前手动 clone 5-6 个 Arc 字段的样板代码。
-/// 使用方式：
-/// ```ignore
-/// let bctx = ctx.to_bot_context();
-/// tokio::spawn(async move { ... use bctx.api_client, bctx.config ... });
-/// ```
-#[derive(Clone)]
-pub struct BotContext {
-    pub api_client: Arc<RwLock<Option<KookClient>>>,
-    pub config: Arc<BotConfig>,
-    pub play_state: Arc<PlayState>,
-    pub netease_client: Arc<RwLock<NeteaseClient>>,
-    pub voice_manager: Arc<Mutex<Option<VoiceManager>>>,
-}
-
-impl<'a> CommandContext<'a> {
-    /// 创建可 Clone 的后台任务上下文
-    pub fn to_bot_context(&self) -> BotContext {
-        BotContext {
-            api_client: self.api_client.clone(),
-            config: Arc::new(self.config.clone()),
-            play_state: self.play_state.clone(),
-            netease_client: self.netease_client.clone(),
-            voice_manager: self.voice_manager.clone(),
-        }
-    }
-}
 
 /// 命令处理结果
 #[derive(Debug, Clone)]
@@ -156,7 +127,7 @@ impl CommandRouter {
             
             // 同时注销别名
             for alias in handler.aliases() {
-                self.handlers.remove(alias);
+                self.handlers.remove(&alias.to_lowercase());
             }
         }
     }
@@ -173,7 +144,7 @@ impl CommandRouter {
     pub async fn handle_message(
         &self,
         data: &MessageData,
-        api_client: Arc<RwLock<Option<KookClient>>>,
+        api_client: Arc<KookClient>,
         config: &BotConfig,
         play_state: &Arc<PlayState>,
         netease_client: Arc<RwLock<NeteaseClient>>,
@@ -216,7 +187,7 @@ impl CommandRouter {
                 let aliases = if handler.aliases().is_empty() {
                     String::new()
                 } else {
-                    format!(" ({}", handler.aliases().join(", "))
+                    format!(" ({})", handler.aliases().join(", "))
                 };
                 help.push_str(&format!(
                     "`{}{}{}` - {}\n",
@@ -323,13 +294,12 @@ mod tests {
 
     fn make_deps(
     ) -> (
-        Arc<RwLock<Option<KookClient>>>,
+        Arc<KookClient>,
         BotConfig,
         Arc<PlayState>,
         Arc<RwLock<NeteaseClient>>,
         Arc<Mutex<Option<VoiceManager>>>,
     ) {
-        let api = Arc::new(RwLock::new(None));
         let config = BotConfig {
             token: "test_token".into(),
             mode: ConnectionMode::Websocket,
@@ -344,7 +314,8 @@ mod tests {
         let ps = Arc::new(PlayState::new());
         let nc = Arc::new(RwLock::new(NeteaseClient::new("http://localhost")));
         let vm = Arc::new(Mutex::new(None));
-        (api, config, ps, nc, vm)
+        let api_client = Arc::new(KookClient::new(&config).unwrap());
+        (api_client, config, ps, nc, vm)
     }
 
     #[tokio::test]
@@ -355,10 +326,10 @@ mod tests {
             aliases: vec![],
         }));
 
-        let (api, config, ps, nc, vm) = make_deps();
+        let (api_client, config, ps, nc, vm) = make_deps();
         let msg = make_message("/hello");
         let result = router
-            .handle_message(&msg, api, &config, &ps, nc, vm)
+            .handle_message(&msg, api_client, &config, &ps, nc, vm)
             .await;
 
         assert!(result.is_some());
@@ -376,10 +347,10 @@ mod tests {
             aliases: vec!["p"],
         }));
 
-        let (api, config, ps, nc, vm) = make_deps();
+        let (api_client, config, ps, nc, vm) = make_deps();
         let msg = make_message("/p");
         let result = router
-            .handle_message(&msg, api, &config, &ps, nc, vm)
+            .handle_message(&msg, api_client, &config, &ps, nc, vm)
             .await;
 
         assert!(result.is_some());
@@ -393,10 +364,10 @@ mod tests {
     async fn test_no_match() {
         let router = CommandRouter::new("/");
 
-        let (api, config, ps, nc, vm) = make_deps();
+        let (api_client, config, ps, nc, vm) = make_deps();
         let msg = make_message("/nonexistent");
         let result = router
-            .handle_message(&msg, api, &config, &ps, nc, vm)
+            .handle_message(&msg, api_client, &config, &ps, nc, vm)
             .await;
 
         assert!(result.is_none());
@@ -410,19 +381,19 @@ mod tests {
             aliases: vec![],
         }));
 
-        let (api, config, ps, nc, vm) = make_deps();
+        let (api_client, config, ps, nc, vm) = make_deps();
 
         // Should match with "!" prefix
         let msg = make_message("!play");
         let result = router
-            .handle_message(&msg, Arc::clone(&api), &config, &ps, Arc::clone(&nc), Arc::clone(&vm))
+            .handle_message(&msg, api_client.clone(), &config, &ps, Arc::clone(&nc), Arc::clone(&vm))
             .await;
         assert!(result.is_some());
 
         // Should NOT match with "/" prefix
         let msg2 = make_message("/play");
         let result2 = router
-            .handle_message(&msg2, api, &config, &ps, nc, vm)
+            .handle_message(&msg2, api_client, &config, &ps, nc, vm)
             .await;
         assert!(result2.is_none());
     }

@@ -1,5 +1,6 @@
 //! Gateway 协议定义
 
+use tracing::warn;
 use serde::{Deserialize, Serialize};
 
 /// Gateway 信令类型
@@ -24,7 +25,10 @@ impl From<u8> for SignalType {
             4 => SignalType::Resume,
             5 => SignalType::Reconnect,
             6 => SignalType::ResumeAck,
-            _ => SignalType::Event,
+            other => {
+                warn!("未知 SignalType: {}", other);
+                SignalType::Event
+            }
         }
     }
 }

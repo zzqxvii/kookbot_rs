@@ -48,7 +48,10 @@ impl ApiBackendManager {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                warn!("创建 HTTP 客户端失败: {}, 使用默认配置", e);
+                Default::default()
+            });
 
         for backend in &self.backends {
             if !backend.enabled {
@@ -104,11 +107,10 @@ impl ApiBackendManager {
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
-        let child = cmd.spawn()
-            .map_err(|e| format!("无法启动 {}: {}", backend.name, e))?;
-
         let mut processes = self.processes.lock()
             .map_err(|e| format!("锁获取失败: {}", e))?;
+        let child = cmd.spawn()
+            .map_err(|e| format!("无法启动 {}: {}", backend.name, e))?;
         processes.insert(backend.name.clone(), child);
 
         Ok(())
@@ -129,7 +131,9 @@ impl ApiBackendManager {
             info!("[ApiBackend] 正在停止 {} ...", name);
 
             if let Some(pid) = child.id() {
-                send_terminate_signal(pid);
+                tokio::task::spawn_blocking(move || send_terminate_signal(pid))
+                    .await
+                    .unwrap_or_else(|e| warn!("spawn_blocking failed: {}", e));
 
                 // 等待最多 5 秒让进程优雅退出
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -164,30 +168,6 @@ impl ApiBackendManager {
             }
         }
         info!("[ApiBackend] 所有后端已停止");
-    }
-}
-
-impl Drop for ApiBackendManager {
-    fn drop(&mut self) {
-        let mut processes = self.processes.lock()
-            .unwrap_or_else(|e| e.into_inner());
-        for (name, mut child) in processes.drain() {
-            info!("[ApiBackend] 正在停止 {} (Drop) ...", name);
-            // 发送 kill 信号（非阻塞）
-            let _ = child.start_kill();
-            // 尝试立即回收，但不阻塞
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    info!("[ApiBackend] {} 已退出 (Drop)", name);
-                }
-                Ok(None) => {
-                    info!("[ApiBackend] {} 未立即退出，交由 OS 回收", name);
-                }
-                Err(e) => {
-                    warn!("[ApiBackend] {} wait error (Drop): {}", name, e);
-                }
-            }
-        }
     }
 }
 

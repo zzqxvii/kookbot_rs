@@ -31,15 +31,11 @@ impl CommandHandler for JoinCommand {
         let user_id = &ctx.data.author_id;
         
         let voice_channel = {
-            if let Some(client) = ctx.api_client.read().await.as_ref() {
-                match client.get_user_voice_channel(guild_id, user_id).await {
-                    Ok(ch) => ch,
-                    Err(e) => {
-                        return CommandResult::Error(format!("获取语音频道信息失败: {}", e));
-                    }
+            match ctx.api_client.get_user_voice_channel(guild_id, user_id).await {
+                Ok(ch) => ch,
+                Err(e) => {
+                    return CommandResult::Error(format!("获取语音频道信息失败: {}", e));
                 }
-            } else {
-                return CommandResult::Error("API 客户端不可用".to_string());
             }
         };
         
@@ -47,19 +43,15 @@ impl CommandHandler for JoinCommand {
             Some(vc) => {
                 info!("用户 {} 在语音频道: {} ({})", user_id, vc.name, vc.id);
                 
-                if let Some(client) = ctx.api_client.read().await.as_ref() {
-                    match client.join_voice_channel(&vc.id).await {
-                        Ok(conn_info) => {
-                            info!("成功加入语音频道: {}:{}", conn_info.ip(), conn_info.port());
-                            CommandResult::Reply(format!("✅ 已加入语音频道 **{}**", vc.name))
-                        }
-                        Err(e) => {
-                            error!("加入语音频道失败: {}", e);
-                            CommandResult::Error(format!("加入语音频道失败: {}", e))
-                        }
+                match ctx.api_client.join_voice_channel(&vc.id).await {
+                    Ok(conn_info) => {
+                        info!("成功加入语音频道: {}:{}", conn_info.ip(), conn_info.port());
+                        CommandResult::Reply(format!("✅ 已加入语音频道 **{}**", vc.name))
                     }
-                } else {
-                    CommandResult::Error("API 客户端不可用".to_string())
+                    Err(e) => {
+                        error!("加入语音频道失败: {}", e);
+                        CommandResult::Error(format!("加入语音频道失败: {}", e))
+                    }
                 }
             }
             None => {

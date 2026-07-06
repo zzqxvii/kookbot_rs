@@ -26,6 +26,8 @@ pub struct GatewayClient {
     ws_write: Mutex<Option<WsWrite>>,
     ws_read: Mutex<Option<WsRead>>,
     session_info: RwLock<SessionInfo>,
+    /// 用于重连时恢复会话
+    resume_info: RwLock<Option<SessionInfo>>,
     event_handler: RwLock<Option<Box<dyn EventHandler>>>,
     running: AtomicBool,
     heartbeat_interval: AtomicU64,
@@ -39,9 +41,10 @@ impl GatewayClient {
             ws_write: Mutex::new(None),
             ws_read: Mutex::new(None),
             session_info: RwLock::new(SessionInfo::default()),
+            resume_info: RwLock::new(None),
             event_handler: RwLock::new(None),
             running: AtomicBool::new(false),
-            heartbeat_interval: AtomicU64::new(30000),
+            heartbeat_interval: AtomicU64::new(0),
         }
     }
 
@@ -58,6 +61,16 @@ impl GatewayClient {
     pub async fn set_event_handler(&self, handler: Box<dyn EventHandler>) {
         info!("设置事件处理器");
         *self.event_handler.write().await = Some(handler);
+    }
+
+    /// 设置重连用的会话信息
+    pub async fn set_resume_info(&self, info: SessionInfo) {
+        *self.resume_info.write().await = Some(info);
+    }
+
+    /// 获取当前会话信息（用于重连时恢复）
+    pub async fn get_session_info(&self) -> SessionInfo {
+        self.session_info.read().await.clone()
     }
 
     pub async fn connect(&self, gateway_url: &str) -> Result<()> {
@@ -93,6 +106,22 @@ impl GatewayClient {
         info!("Intents: {}", self.intents);
         info!("========================================");
 
+
+        // 如果有会话信息，尝试恢复会话
+        let resume_info = self.resume_info.write().await.take();
+        if let Some(info) = &resume_info {
+            if let Some(sid) = &info.session_id {
+                let resume_msg = GatewayMessage::resume(sid, info.last_sn);
+                let mut write = self.ws_write.lock().await;
+                if let Some(ref mut s) = *write {
+                    let payload = serde_json::to_string(&resume_msg).unwrap_or_default();
+                    info!("[Gateway] 发送 Resume 消息，session={}, sn={}", sid, info.last_sn);
+                    if let Err(e) = s.send(Message::Text(payload.into())).await {
+                        warn!("发送 Resume 失败: {}", e);
+                    }
+                }
+            }
+        }
         // 等待第一个消息（Hello），最多等待10秒
         info!("等待服务器 Hello 消息...");
         let mut hello_received = false;
@@ -115,11 +144,17 @@ impl GatewayClient {
             return Err(BotError::GatewayError("未收到 Hello 消息".to_string()));
         }
 
-        let mut heartbeat_tick = interval(Duration::from_secs(30));
-        heartbeat_tick.tick().await; // 跳过第一次立即 tick
+        let hb_ms = self.heartbeat_interval.load(Ordering::Relaxed);
+        let hb_duration = if hb_ms > 0 {
+            Duration::from_millis(hb_ms)
+        } else {
+            Duration::from_secs(30)
+        };
+        let mut heartbeat_tick = interval(hb_duration);
+        heartbeat_tick.tick().await;
         let mut message_count = 0u32;
 
-        info!("[Gateway] 开始接收事件，心跳间隔 30 秒");
+        info!("[Gateway] 开始接收事件，心跳间隔 {}ms", hb_duration.as_millis());
 
         loop {
             if !self.running.load(Ordering::Acquire) {

@@ -69,6 +69,20 @@ pub fn extract_filename(path: &str) -> Option<&str> {
 ///
 /// // update_netease_cookie(Path::new("config.toml"), "MUSIC_U=xxx;").unwrap();
 /// ```
+/// 转义字符串以便安全写入 TOML 基本字符串
+/// 将 `\` 替换为 `\\`，`"` 替换为 `\"`
+fn escape_toml_value(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 pub fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> anyhow::Result<()> {
     use std::fs;
     use tracing::info;
@@ -92,7 +106,7 @@ pub fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> any
         if trimmed.starts_with('[') && trimmed.ends_with(']') && in_music_section {
             // 如果在离开 [music] section 时还没有替换 cookie，在这里添加
             if !cookie_replaced {
-                new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+                new_lines.push(format!("netease_cookie = \"{}\"", escape_toml_value(cookie)));
                 cookie_replaced = true;
             }
             in_music_section = false;
@@ -102,7 +116,7 @@ pub fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> any
 
         // 检查是否是 netease_cookie 行（支持前导空格）
         if trimmed.starts_with("netease_cookie") && !cookie_replaced {
-            new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+            new_lines.push(format!("netease_cookie = \"{}\"", escape_toml_value(cookie)));
             cookie_replaced = true;
             continue;
         }
@@ -117,7 +131,7 @@ pub fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> any
 
     // 如果文件结束还在 [music] section 中且未替换 cookie，在末尾添加
     if in_music_section && !cookie_replaced {
-        new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+        new_lines.push(format!("netease_cookie = \"{}\"", escape_toml_value(cookie)));
         cookie_replaced = true;
     }
 
@@ -125,7 +139,7 @@ pub fn update_netease_cookie(config_path: &std::path::Path, cookie: &str) -> any
     if !cookie_replaced {
         new_lines.push(String::new());
         new_lines.push("[music]".to_string());
-        new_lines.push(format!("netease_cookie = \"{}\"", cookie));
+        new_lines.push(format!("netease_cookie = \"{}\"", escape_toml_value(cookie)));
     }
 
     fs::write(config_path, new_lines.join("\n"))?;

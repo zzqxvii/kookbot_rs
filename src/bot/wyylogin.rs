@@ -1,6 +1,7 @@
 //! 网易云登录命令模块
 
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -9,15 +10,15 @@ use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 use crate::core::config::BotConfig;
 use crate::music::NeteaseClient;
 
-/// 网易云登录命令
 pub struct WyyLoginCommand {
     netease_client: Arc<RwLock<NeteaseClient>>,
     config: BotConfig,
+    login_in_progress: Arc<AtomicBool>,
 }
 
 impl WyyLoginCommand {
     pub fn new(netease_client: Arc<RwLock<NeteaseClient>>, config: BotConfig) -> Self {
-        Self { netease_client, config }
+        Self { netease_client, config, login_in_progress: Arc::new(AtomicBool::new(false)) }
     }
     
     /// 生成二维码图片并上传到 Kook
@@ -43,15 +44,13 @@ impl WyyLoginCommand {
 
         let image_data = buffer.into_inner();
 
-        if let Some(client) = ctx.api_client.read().await.as_ref() {
-            match client.upload_image(&image_data).await {
-                Ok(kook_url) => {
-                    info!("二维码上传成功: {}", kook_url);
-                    return Some(kook_url);
-                }
-                Err(e) => {
-                    warn!("上传二维码图片失败: {}", e);
-                }
+        match ctx.api_client.upload_image(&image_data).await {
+            Ok(kook_url) => {
+                info!("二维码上传成功: {}", kook_url);
+                return Some(kook_url);
+            }
+            Err(e) => {
+                warn!("上传二维码图片失败: {}", e);
             }
         }
 
@@ -70,19 +69,25 @@ impl CommandHandler for WyyLoginCommand {
     }
     
     fn usage(&self) -> &'static str {
-        "!wyylogin"
+        let s = format!("{}wyylogin", self.config.prefix);
+        Box::leak(s.into_boxed_str())
     }
     
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
+        // 并发守卫：防止重复登录
+        if self.login_in_progress.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            return CommandResult::Error("登录已在进行中，请等待完成".to_string());
+        }
+
         let channel_id = &ctx.data.target_id;
         
         // 发送初始化消息
-        if let Some(client) = ctx.api_client.read().await.as_ref() {
-            let _ = client.send_channel_message(
-                channel_id,
-                "🔑 正在生成网易云登录二维码..."
-            ).await;
-        }
+        if let Err(e) = ctx.api_client.send_channel_message(
+            channel_id,
+            "🔑 正在生成网易云登录二维码..."
+        ).await {
+            warn!("发送初始化消息失败: {}", e);
+        };
         
         let netease = self.netease_client.read().await;
         
@@ -90,6 +95,7 @@ impl CommandHandler for WyyLoginCommand {
         let key = match netease.get_qr_key().await {
             Ok(key_data) => key_data.unikey,
             Err(e) => {
+                self.login_in_progress.store(false, Ordering::Release);
                 return CommandResult::Error(format!("获取二维码失败: {}", e));
             }
         };
@@ -98,6 +104,7 @@ impl CommandHandler for WyyLoginCommand {
         let qr_code = match netease.create_qr_code(&key).await {
             Ok(qr) => qr,
             Err(e) => {
+                self.login_in_progress.store(false, Ordering::Release);
                 return CommandResult::Error(format!("生成二维码失败: {}", e));
             }
         };
@@ -109,21 +116,28 @@ impl CommandHandler for WyyLoginCommand {
         let image_url = self.generate_and_upload_qrcode(&ctx, &qr_code.qrurl).await;
         info!("二维码上传结果: {:?}", image_url);
         
+        // 使用配置的前缀
+        let prefix = ctx.config.prefix.clone();
+        
         // 发送二维码
-        if let Some(client) = ctx.api_client.read().await.as_ref() {
-            if let Some(ref url) = image_url {
-                info!("发送图片消息: {}", url);
-                let _ = client.send_image_message(channel_id, url).await;
-                let _ = client.send_channel_message(channel_id,
-                    "📱 **请扫描上方二维码登录网易云音乐**\n⏰ 二维码有效期 5 分钟").await;
-            } else {
-                warn!("二维码上传失败，发送链接");
-                let _ = client.send_channel_message(channel_id,
-                    &format!(
-                        "📱 **网易云登录**\n\n点击链接扫码：{}\n\n⏰ 二维码有效期 5 分钟",
-                        qr_code.qrurl
-                    )).await;
+        if let Some(url) = &image_url {
+            info!("发送图片消息: {}", url);
+            if let Err(e) = ctx.api_client.send_image_message(channel_id, url).await {
+                warn!("发送二维码图片失败: {}", e);
             }
+            if let Err(e) = ctx.api_client.send_channel_message(channel_id,
+                "📱 **请扫描上方二维码登录网易云音乐**\n⏰ 二维码有效期 5 分钟").await {
+                warn!("发送扫码提示失败: {}", e);
+            };
+        } else {
+            warn!("二维码上传失败，发送链接");
+            if let Err(e) = ctx.api_client.send_channel_message(channel_id,
+                &format!(
+                    "📱 **网易云登录**\n\n点击链接扫码：{}\n\n⏰ 二维码有效期 5 分钟",
+                    qr_code.qrurl
+                )).await {
+                warn!("发送二维码链接失败: {}", e);
+            };
         }
         
         // 轮询检查登录状态
@@ -131,7 +145,9 @@ impl CommandHandler for WyyLoginCommand {
         let netease_api_url = self.config.music.netease_api_url.clone();
         let key_clone = key.clone();
         let channel_id_clone = channel_id.to_string();
-        let config_path = std::path::PathBuf::from("config.toml");
+        // 从 BotConfig 获取配置路径
+        let config_path = ctx.config.config_path.clone().unwrap_or_else(|| std::path::PathBuf::from("config.toml"));
+        let login_flag = self.login_in_progress.clone();
         
         tokio::spawn(async move {
             let netease_client = NeteaseClient::new(&netease_api_url);
@@ -140,14 +156,23 @@ impl CommandHandler for WyyLoginCommand {
             let key_str = key_clone.clone();
             info!("启动登录检查任务，key: {}", key_str);
             
+            struct LoginGuard(Arc<AtomicBool>);
+            impl Drop for LoginGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Release);
+                    info!("登录任务结束，重置状态");
+                }
+            }
+            let _guard = LoginGuard(login_flag.clone());
+            
             loop {
                 attempts += 1;
                 info!("检查登录状态... ({}/{}), key: {}", attempts, max_attempts, key_str);
                 
                 if attempts > max_attempts {
-                    if let Some(client) = api_client.read().await.as_ref() {
-                        let _ = client.send_channel_message(&channel_id_clone,
-                            "⏰ 二维码已过期，请重新发送 `/wyylogin`").await;
+                    if let Err(e) = api_client.send_channel_message(&channel_id_clone,
+                        &format!("⏰ 二维码已过期，请重新发送 `{}wyylogin`", prefix)).await {
+                        warn!("发送过期提示失败: {}", e);
                     }
                     break;
                 }
@@ -159,9 +184,9 @@ impl CommandHandler for WyyLoginCommand {
                         info!("登录状态码: {}", result.code);
                         match result.code {
                             800 => {
-                                if let Some(client) = api_client.read().await.as_ref() {
-                                    let _ = client.send_channel_message(&channel_id_clone,
-                                        "⏰ 二维码已过期，请重新发送 `/wyylogin`").await;
+                                if let Err(e) = api_client.send_channel_message(&channel_id_clone,
+                                    &format!("⏰ 二维码已过期，请重新发送 `{}wyylogin`", prefix)).await {
+                                    warn!("发送过期提示失败: {}", e);
                                 }
                                 break;
                             }
@@ -171,28 +196,28 @@ impl CommandHandler for WyyLoginCommand {
                             }
                             802 => {
                                 info!("已扫码，等待确认");
-                                if let Some(client) = api_client.read().await.as_ref() {
-                                    let _ = client.send_channel_message(&channel_id_clone,
-                                        "✅ 已扫描，请在手机上确认登录").await;
+                                if let Err(e) = api_client.send_channel_message(&channel_id_clone,
+                                    "✅ 已扫描，请在手机上确认登录").await {
+                                    warn!("发送确认提示失败: {}", e);
                                 }
                             }
                             803 => {
                                 info!("登录成功! cookie: {:?}", result.cookie);
-                                if let Some(ref cookie) = result.cookie {
+                                if let Some(cookie) = &result.cookie {
                                     use crate::common::utils::update_netease_cookie;
                                     match update_netease_cookie(&config_path, cookie) {
                                         Ok(_) => {
-                                            if let Some(client) = api_client.read().await.as_ref() {
-                                                let nickname = result.nickname.as_deref().unwrap_or("用户");
-                                                let _ = client.send_channel_message(&channel_id_clone,
-                                                    &format!("🎉 登录成功！欢迎 **{}**\nCookie 已保存，请重启机器人后使用 `/wyy` 播放完整音质", nickname)).await;
+                                            let nickname = result.nickname.as_deref().unwrap_or("用户");
+                                            if let Err(e) = api_client.send_channel_message(&channel_id_clone,
+                                                &format!("🎉 登录成功！欢迎 **{}**\nCookie 已保存，请重启机器人后使用 `{}wyy` 播放完整音质", nickname, prefix)).await {
+                                                warn!("发送登录成功消息失败: {}", e);
                                             }
                                         }
                                         Err(e) => {
                                             error!("保存 cookie 失败: {}", e);
-                                            if let Some(client) = api_client.read().await.as_ref() {
-                                                let _ = client.send_channel_message(&channel_id_clone,
-                                                    &format!("⚠️ 登录成功，但保存 Cookie 失败: {}", e)).await;
+                                            if let Err(e2) = api_client.send_channel_message(&channel_id_clone,
+                                                &format!("⚠️ 登录成功，但保存 Cookie 失败: {}", e)).await {
+                                                warn!("发送保存失败消息失败: {}", e2);
                                             }
                                         }
                                     }

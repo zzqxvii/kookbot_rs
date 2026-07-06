@@ -6,7 +6,6 @@
 
 use owo_colors::OwoColorize;
 use std::fmt;
-use std::sync::LazyLock;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -39,17 +38,14 @@ where
         };
         write!(writer, "{} ", level_str)?;
 
-        static LOCAL_OFFSET: LazyLock<chrono::FixedOffset> = LazyLock::new(|| {
-            *chrono::Local::now().offset()
-        });
-        let timestamp = chrono::Utc::now()
-            .with_timezone(&*LOCAL_OFFSET)
+        let timestamp = chrono::Local::now()
             .format("%Y/%m/%d %H:%M:%S");
         write!(writer, "{} ", timestamp)?;
 
         // 文件和行号 (路径固定宽度18字符)
         let file = meta.file().unwrap_or("unknown");
         let line = meta.line().unwrap_or(0);
+        // Rust 源文件路径均为 ASCII，在 len-18 处字节切片是安全的
         let location = if file.len() > 18 {
             format!("{}:{}", &file[file.len() - 18..], line)
         } else {

@@ -97,13 +97,14 @@ impl SilenceSender {
             let mut seq: u16 = 0;
             let mut ts: u32 = 0;
             let packet = build_silence_rtp();
+            let mut buf = Vec::with_capacity(RTP_HEADER_SIZE + OPUS_SILENCE_FRAME.len());
             while running.load(Ordering::Acquire) {
-                // 动态构建包头 (seq + timestamp 每帧变化)
-                let mut buf = Vec::with_capacity(RTP_HEADER_SIZE + OPUS_SILENCE_FRAME.len());
+                buf.clear();
                 push_rtp_header(&mut buf, pt, seq, ts, ssrc);
                 buf.extend_from_slice(&packet);
 
                 if socket.send(&buf).is_err() {
+                    running.store(false, Ordering::Relaxed);
                     debug!("SilenceSender: UDP send 失败, 停止");
                     break;
                 }

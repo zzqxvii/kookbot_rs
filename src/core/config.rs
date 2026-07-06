@@ -36,6 +36,9 @@ pub struct BotConfig {
     pub music: MusicConfig,
     #[serde(default)]
     pub player: PlayerConfig,
+    /// 配置文件路径（运行时注入，不从 TOML 反序列化）
+    #[serde(skip, default)]
+    pub config_path: Option<PathBuf>,
 }
 
 impl BotConfig {
@@ -205,12 +208,13 @@ fn default_preload_count() -> usize {
 
 impl BotConfig {
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
-        let content = fs::read_to_string(path)
+        let content = fs::read_to_string(path.as_ref())
             .map_err(|e| BotError::ConfigError(format!("无法读取配置文件: {}", e)))?;
 
-        let config: BotConfig = toml::from_str(&content)
+        let mut config: BotConfig = toml::from_str(&content)
             .map_err(|e| BotError::ConfigError(format!("解析配置文件失败: {}", e)))?;
 
+        config.config_path = Some(path.as_ref().to_path_buf());
         config.validate()?;
         Ok(config)
     }

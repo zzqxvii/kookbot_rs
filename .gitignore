@@ -64,3 +64,6 @@ doc/
 # Pi agent 工作目录
 .bg-shell/
 .gsd/
+
+# Spec workflow (auto-generated templates)
+.spec-workflow/

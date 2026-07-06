@@ -3,6 +3,7 @@ use crate::player::{Music, Sender};
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
+use std::sync::LazyLock;
 use tracing::{debug, info, warn};
 use regex::Regex;
 
@@ -11,6 +12,7 @@ pub struct NeteaseClient {
     http: Client,
     base_url: String,
     cookie: Option<String>,
+    cache_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +67,17 @@ pub struct PlaylistDetail {
     pub track_ids: Vec<u64>,
 }
 
+static SONG_ID_PATTERNS: LazyLock<[Regex; 4]> = LazyLock::new(|| [
+    // music.163.com/#/song?id=xxx
+    Regex::new(r"music\.163\.com/(?:#/)?song\?id=(\d+)").unwrap(),
+    // music.163.com/song/media/outer/url?id=xxx
+    Regex::new(r"music\.163\.com/song/media/outer/url\?id=(\d+)").unwrap(),
+    // y.music.163.com/m/song?appid=...&id=xxx
+    Regex::new(r"y\.music\.163\.com/m/song[^\d]*(\d+)").unwrap(),
+    // 分享链接: https://share.music.163.com/xxx?songId=xxx
+    Regex::new(r"songId[=:](\d+)").unwrap(),
+]);
+
 impl NeteaseClient {
     pub fn new(base_url: &str) -> Self {
         let http = Client::builder()
@@ -76,6 +89,7 @@ impl NeteaseClient {
             http,
             base_url: base_url.to_string(),
             cookie: None,
+            cache_dir: String::from("./cache"),
         }
     }
     
@@ -91,6 +105,11 @@ impl NeteaseClient {
     
     pub fn has_cookie(&self) -> bool {
         self.cookie.as_deref().map_or(false, |c| !c.is_empty())
+    }
+    
+    /// 设置缓存目录
+    pub fn set_cache_dir(&mut self, dir: String) {
+        self.cache_dir = dir;
     }
     
     /// 检查 API 是否可用
@@ -109,26 +128,6 @@ impl NeteaseClient {
         }
     }
     
-    /// 清理 cookie 字符串，移除 Max-Age, Expires, Path 等属性
-    fn clean_cookie(raw: &str) -> String {
-        raw.split(';')
-            .map(|s| s.trim())
-            .filter(|s| {
-                let s_lower = s.to_lowercase();
-                // 过滤掉属性字段
-                !s_lower.starts_with("max-age")
-                && !s_lower.starts_with("expires")
-                && !s_lower.starts_with("path=")
-                && !s_lower.starts_with("domain=")
-                && !s_lower.starts_with("secure")
-                && !s_lower.starts_with("httponly")
-                && !s_lower.starts_with("samesite")
-                && !s.is_empty()
-            })
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
     /// 获取登录二维码 key
     pub async fn get_qr_key(&self) -> Result<QrKeyData> {
         let url = format!("{}/login/qr/key", self.base_url);
@@ -217,7 +216,7 @@ impl NeteaseClient {
             // 登录成功，从响应中获取并清理 cookie
             json.get("cookie")
                 .and_then(|c| c.as_str())
-                .map(|s| Self::clean_cookie(s))
+                .map(|s| crate::common::utils::clean_cookie(s))
         } else {
             None
         };
@@ -241,31 +240,15 @@ impl NeteaseClient {
         }
 
         // 匹配各种分享链接格式
-        let patterns = [
-            // music.163.com/#/song?id=xxx
-            r"music\.163\.com/(?:#/)?song\?id=(\d+)",
-            // music.163.com/song/media/outer/url?id=xxx
-            r"music\.163\.com/song/media/outer/url\?id=(\d+)",
-            // y.music.163.com/m/song?appid=...&id=xxx
-            r"y\.music\.163\.com/m/song[^\d]*(\d+)",
-            // 分享链接: https://share.music.163.com/xxx?songId=xxx
-            r"songId[=:](\d+)",
-            // 短链接中的ID
-            r"id[=:](\d+)",
-        ];
-
-        for pattern in &patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                if let Some(caps) = re.captures(input) {
-                    if let Some(m) = caps.get(1) {
-                        if let Ok(id) = m.as_str().parse::<u64>() {
-                            return Some(id);
-                        }
+        for re in SONG_ID_PATTERNS.iter() {
+            if let Some(caps) = re.captures(input) {
+                if let Some(m) = caps.get(1) {
+                    if let Ok(id) = m.as_str().parse::<u64>() {
+                        return Some(id);
                     }
                 }
             }
         }
-
         None
     }
 
@@ -379,15 +362,14 @@ impl NeteaseClient {
     pub async fn search(&self, keyword: &str, limit: u32) -> Result<Vec<NeteaseSong>> {
         let url = format!("{}/cloudsearch", self.base_url);
         
-        let response = self.http
+        let request = self.http
             .get(&url)
             .query(&[
                 ("keywords", keyword),
                 ("type", "1"),
                 ("limit", &limit.to_string()),
-            ])
-            .send()
-            .await?;
+            ]);
+        let response = self.add_cookie(request).send().await?;
 
         let json: serde_json::Value = response.json().await?;
         
@@ -402,9 +384,9 @@ impl NeteaseClient {
         let songs: Vec<NeteaseSong> = json
             .get("result")
             .and_then(|r| r.get("songs"))
-            .and_then(|s| serde_json::from_value(s.clone()).ok())
+            .and_then(|s| serde_json::from_value(s.clone())
+                .map_err(|e| { warn!("解析歌曲失败: {}", e); e }).ok())
             .unwrap_or_default();
-
         info!("搜索 \"{}\" 找到 {} 首歌曲", keyword, songs.len());
         Ok(songs)
     }
@@ -413,11 +395,10 @@ impl NeteaseClient {
     pub async fn get_song_detail(&self, song_id: u64) -> Result<NeteaseSong> {
         let url = format!("{}/song/detail", self.base_url);
         
-        let response = self.http
+        let request = self.http
             .get(&url)
-            .query(&[("ids", &song_id.to_string())])
-            .send()
-            .await?;
+            .query(&[("ids", &song_id.to_string())]);
+        let response = self.add_cookie(request).send().await?;
 
         let json: serde_json::Value = response.json().await?;
         
@@ -479,7 +460,8 @@ impl NeteaseClient {
 
             let songs: Vec<NeteaseSong> = json
                 .get("songs")
-                .and_then(|s| serde_json::from_value(s.clone()).ok())
+                .and_then(|s| serde_json::from_value(s.clone())
+                    .map_err(|e| { warn!("批量解析歌曲失败: {}", e); e }).ok())
                 .unwrap_or_default();
             
             all_songs.extend(songs);
@@ -502,13 +484,11 @@ impl NeteaseClient {
     pub async fn get_song_url(&self, song_id: u64) -> Result<Option<String>> {
         let url = format!("{}/song/url", self.base_url);
         let song_id_str = song_id.to_string();
-        let br = "320000".to_string();
-        
         let request = self.http
             .get(&url)
             .query(&[
-                ("id", &song_id_str),
-                ("br", &br),
+                ("id", song_id_str.as_str()),
+                ("br", "320000"),
             ]);
         
         let response = self.add_cookie(request).send().await?;
@@ -538,13 +518,11 @@ impl NeteaseClient {
     pub async fn get_song_url_v2(&self, song_id: u64) -> Result<Option<String>> {
         let url = format!("{}/song/url/v1", self.base_url);
         let song_id_str = song_id.to_string();
-        let level = "exhigh".to_string();
-        
         let request = self.http
             .get(&url)
             .query(&[
-                ("id", &song_id_str),
-                ("level", &level),
+                ("id", song_id_str.as_str()),
+                ("level", "exhigh"),
             ]);
         
         let response = self.add_cookie(request).send().await?;
@@ -573,7 +551,7 @@ impl NeteaseClient {
     /// 下载歌曲到临时文件
     /// 返回本地文件路径
     pub async fn download_song(&self, url: &str, song_id: u64) -> Result<String> {
-        let cache_dir = std::path::Path::new("./cache");
+        let cache_dir = std::path::Path::new(&self.cache_dir);
         if !cache_dir.exists() {
             std::fs::create_dir_all(cache_dir)?;
         }
@@ -592,8 +570,8 @@ impl NeteaseClient {
         
         info!("正在下载歌曲: {} -> {:?}", url, file_path);
         
-        let request = self.http.get(url);
-        let response = self.add_cookie(request).send().await?;
+        // 不向 CDN 发送登录 Cookie
+        let response = self.http.get(url).send().await?;
         
         if !response.status().is_success() {
             return Err(BotError::KookApiError {
