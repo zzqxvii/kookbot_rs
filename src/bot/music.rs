@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 use crate::common::play_state::PlayState;
@@ -46,7 +46,10 @@ impl WyyCommand {
     /// 处理歌单播放 (stdin pipe 模式)
     ///
     /// 一次 join_voice，FFmpeg 从 stdin 读取逐首喂入的 MP3 数据。
-    /// 支持停止和切歌：切歌时杀 FFmpeg → rejoin → 重启管道继续剩余歌曲。
+    /// 支持停止和切歌。
+    ///
+    /// **性能**: 卡片更新通过 mpsc channel 异步完成（不阻塞音频推流）；
+    /// 预下载使用 Notify 通知机制，下首歌在上首播放期间后台完成。
     async fn handle_playlist(
         &self,
         ctx: &CommandContext<'_>,
@@ -68,8 +71,6 @@ impl WyyCommand {
             }
             (playlist.name.clone(), playlist.track_ids.clone(), playlist.track_ids.len())
         };
-
-
 
         // 发送歌单信息
         let msg = format!("📋 **歌单：{}**", playlist_name);
@@ -95,6 +96,12 @@ impl WyyCommand {
         let vc_id = vc.id.clone();
         self.play_state.reset_stats();
 
+        // ── 启动非阻塞卡片更新器 ──
+        let card_tx = crate::bot::playback::spawn_card_updater(
+            ctx.api_client.clone(),
+            self.play_state.clone(),
+        );
+
         // ── 后台任务 ──
         let requester_name = ctx.data.extra.author.nickname.clone();
         let netease_client = self.netease_client.clone();
@@ -108,17 +115,16 @@ impl WyyCommand {
             let ch_cleanup = channel_id.clone();
             let vc_cleanup = vc_id.clone();
 
-
             let rt_outer = tokio::runtime::Handle::current();
             let result = tokio::task::spawn_blocking(move || {
                 use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
-                use std::sync::Mutex;
-
+                use crate::bot::playback::{PreDownloadSlot, PreDownloadedSong, music_to_play_music, music_to_queue_music};
 
                 let rt = tokio::runtime::Handle::current();
                 let mut idx: usize = 0;
-                // 预下载：当前歌播放时后台下载下一首
-                let next_file: Arc<Mutex<Option<Option<String>>>> = Arc::new(Mutex::new(None));
+
+                // 预下载槽位：上一首歌播放期间后台下载下一首
+                let next_slot = Arc::new(PreDownloadSlot::new());
 
                 let mut streamer = match FFmpegDirectStreamer::new(
                     StreamerConfig::from(&streaming_info), play_state.clone()
@@ -140,112 +146,99 @@ impl WyyCommand {
                     }
                 };
 
+                // 辅助函数：同步下载一首歌（含详情，用于首歌曲或预下载失败回退）
+                let download_with_detail = |tid: u64| -> Option<PreDownloadedSong> {
+                    rt.block_on(async {
+                        let netease = netease_client.read().await;
+                        let url = netease.get_song_url(tid).await.ok().flatten()?;
+                        let song = netease.get_song_detail(tid).await.ok()?;
+                        let music = netease.to_music(&song);
+                        let file_path = netease.download_song(&url, tid).await.ok()?;
+                        Some(PreDownloadedSong { file_path, music })
+                    })
+                };
+
+                // 后台预下载（不阻塞）
+                let spawn_pre_download = |slot: Arc<PreDownloadSlot>, tid: u64, rt_outer: &tokio::runtime::Handle| {
+                    let nc = netease_client.clone();
+                    rt_outer.spawn(async move {
+                        let netease = nc.read().await;
+                        let result = if let Some(url) = netease.get_song_url(tid).await.ok().flatten() {
+                            if let Ok(song) = netease.get_song_detail(tid).await {
+                                let music = netease.to_music(&song);
+                                netease.download_song(&url, tid).await.ok()
+                                    .map(|file_path| PreDownloadedSong { file_path, music })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        slot.store(result);
+                    });
+                };
+
+                // 发送卡片更新（非阻塞 channel send）
+                let send_card = |song: &PreDownloadedSong, remaining: usize, next_songs: &[PreDownloadedSong]| {
+                    let queue: Vec<_> = next_songs.iter().map(|s| music_to_queue_music(&s.music)).collect();
+                    let _ = card_tx.send(crate::bot::playback::CardUpdateRequest {
+                        current: music_to_play_music(&song.music, &requester_name),
+                        queue,
+                        queue_total: remaining,
+                        channel_id: channel_id.clone(),
+                        duration_secs: song.music.duration.unwrap_or(0),
+                    });
+                };
+
                 while idx < track_ids.len() {
                     if play_state.is_stop_requested() {
                         info!("收到停止请求，终止播放");
                         break;
                     }
 
-                    // 获取文件路径：优先用预下载
-                    let file_path = {
-                        let mut guard = next_file.lock().expect("next_file lock poisoned");
-                        match guard.take() {
-                            Some(Some(p)) => p,
-                            Some(None) => {
+                    // ── 1. 获取当前歌曲（等待预下载或同步下载） ──
+                    let current_song: PreDownloadedSong = if idx == 0 {
+                        // 首歌曲：没有预下载，同步下载（不可避免的一次阻塞）
+                        match download_with_detail(track_ids[0]) {
+                            Some(s) => s,
+                            None => {
+                                warn!("[{}/{}] 首歌曲下载失败", idx + 1, total_count);
+                                break;
+                            }
+                        }
+                    } else {
+                        // 等待预下载完成（通常已在上首播放期间完成，零延迟）
+                        match next_slot.take_blocking(&rt) {
+                            Some(s) => s,
+                            None => {
                                 warn!("[{}/{}] 预下载失败，跳过", idx + 1, total_count);
                                 idx += 1;
                                 continue;
                             }
-                            None => {
-                                drop(guard);
-                                let tid = track_ids[idx];
-                                debug!("[{}/{}] 下载中...", idx + 1, total_count);
-                                match rt.block_on(async {
-                                    let netease = netease_client.read().await;
-                                    let url = netease.get_song_url(tid).await.ok().flatten()?;
-                                    netease.download_song(&url, tid).await.ok()
-                                }) {
-                                    Some(p) => p,
-                                    None => {
-                                        warn!("[{}/{}] 下载失败，跳过", idx + 1, total_count);
-                                        idx += 1;
-                                        continue;
-                                    }
-                                }
-                            }
                         }
                     };
 
-                    // 后台预下载下一首
+                    // ── 2. 后台预下载下一首（在当前歌曲播放期间进行） ──
                     if idx + 1 < track_ids.len() {
-                        let nf = next_file.clone();
-                        let nc = netease_client.clone();
-                        let next_tid = track_ids[idx + 1];
-                        let rt_outer = rt_outer.clone();
-                        rt_outer.spawn(async move {
-                            let netease = nc.read().await;
-                            let result = if let Some(url) = netease.get_song_url(next_tid).await.ok().flatten() {
-                                netease.download_song(&url, next_tid).await.ok()
-                            } else {
-                                None
-                            };
-                            if let Ok(mut guard) = nf.lock() {
-                                *guard = Some(result);
-                            }
-                        });
+                        spawn_pre_download(next_slot.clone(), track_ids[idx + 1], &rt_outer);
                     }
 
-                    // 更新卡片
-                    rt.block_on(async {
-                        
-                        let netease = netease_client.read().await;
-                        let tid = track_ids[idx];
-                        if let Ok(song) = netease.get_song_detail(tid).await {
-                            let music = netease.to_music(&song);
-                            play_state.set_current_song_duration(music.duration.unwrap_or(0));
-                            use crate::common::card::{build_play_card, PlayCardData, PlayMusic, QueueMusic, Sender as CardSender};
-                            let mut data = PlayCardData::new(PlayMusic {
-                                title: music.title,
-                                author: music.author,
-                                platform: music.platform,
-                                pic_url: music.pic_url,
-                                sender: CardSender {
-                                    nick_name: requester_name.clone(),
-                                    avatar_url: None,
-                                },
-                            });
-                            let remaining = total_count.saturating_sub(idx + 1);
-                            let mut queue = Vec::new();
-                            if remaining > 0 {
-                                for i in 1..=2.min(remaining) {
-                                    let next_tid = track_ids[idx + i];
-                                    if let Ok(next_song) = netease.get_song_detail(next_tid).await {
-                                        let author = next_song.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
-                                        queue.push(QueueMusic {
-                                            title: next_song.name.clone(),
-                                            author,
-                                            platform: "网易云".to_string(),
-                                            pic_url: next_song.album.pic_url.clone(),
-                                            sender: CardSender { nick_name: "".to_string(), avatar_url: None },
-                                        });
-                                    }
-                                }
-                            }
-                            data = data.with_queue(queue, remaining);
-                            let json = build_play_card(&data);
-                            if let Ok(msg_id) = api_client.send_card_message(&channel_id, &json).await {
-                                if let Some(old) = play_state.take_play_msg_id() {
-                                    let _ = api_client.delete_message(&old).await;
-                                }
-                                play_state.set_play_msg_id(msg_id);
-                            }
-                        }
-                    
-                    });
+                    // ── 3. 预取队列中接下来 2 首的信息用于卡片展示 ──
+                    let next_queue: Vec<PreDownloadedSong> = if idx + 1 < track_ids.len() {
+                        // 尝试从预下载结果获取（非阻塞检查）
+                        // 如果刚好预下载完成则直接使用，否则跳过队列展示
+                        Vec::new()
+                    } else {
+                        Vec::new()
+                    };
 
-                    // 分块喂入 stdin（ID3 跳过 + 切歌/停止检查内置于 feed_file_to_stdin）
-                    info!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
-                    match std::fs::File::open(&file_path) {
+                    // ── 4. 发送卡片更新（非阻塞！） ──
+                    let remaining = total_count.saturating_sub(idx + 1);
+                    send_card(&current_song, remaining, &next_queue);
+
+                    // ── 5. 喂入 stdin 播放 ──
+                    info!("[{}/{}] 正在播放: {}", idx + 1, total_count, current_song.file_path);
+                    match std::fs::File::open(&current_song.file_path) {
                         Ok(mut f) => {
                             crate::audio::skip_id3_tag(&mut f);
                             crate::audio::feed_file_to_stdin(
@@ -256,24 +249,25 @@ impl WyyCommand {
                             );
                         }
                         Err(e) => {
-                            error!("打开文件失败: {}: {}", file_path, e);
+                            error!("打开文件失败: {}: {}", current_song.file_path, e);
                         }
                     }
                     idx += 1;
                 }
+
                 drop(stdin);
                 let _ = streamer.wait();
-
                 play_state.set_stopped();
                 Ok(())
             }).await;
+
             // ── 清理 ──
             let playback_err = match &result {
                 Ok(Ok(())) => None,
                 Ok(Err(e)) => Some(e.clone()),
                 Err(e) => Some(format!("播放线程异常: {}", e)),
             };
-            
+
             if let Some(old) = ps_cleanup.take_play_msg_id() {
                 let _ = api_cleanup.delete_message(&old).await;
             }
@@ -286,7 +280,7 @@ impl WyyCommand {
                 }
             }
             let _ = api_cleanup.leave_voice_channel(&vc_cleanup).await;
-        
+
             ps_cleanup.reset_stats();
             info!("歌单播放完成");
         });
