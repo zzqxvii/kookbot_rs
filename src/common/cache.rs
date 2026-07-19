@@ -46,7 +46,7 @@ fn cleanup_cache_sync(cache_dir: &str, max_size_mb: u64) {
         return;
     }
 
-    entries.sort_by(|a, b| a.2.cmp(&b.2));
+    entries.sort_by_key(|a| a.2);
 
     let mut freed: u64 = 0;
     let mut deleted = 0;

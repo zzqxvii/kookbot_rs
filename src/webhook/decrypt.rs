@@ -33,10 +33,10 @@ impl MessageDecryptor {
         // 1. Base64 解码整个密文
         let encrypted_bytes = base64::engine::general_purpose::STANDARD
             .decode(encrypted_data)
-            .map_err(|e| BotError::ConfigError(format!("Base64 解码失败: {}", e)))?;
+            .map_err(|e| BotError::WebhookError(format!("Base64 解码失败: {}", e)))?;
 
         if encrypted_bytes.len() < 16 {
-            return Err(BotError::ConfigError("密文太短".to_string()));
+            return Err(BotError::WebhookError("密文太短".to_string()));
         }
 
         // 2. 截取前 16 字节作为 IV
@@ -44,11 +44,11 @@ impl MessageDecryptor {
 
         // 3. 剩余部分作为实际的加密数据 (需要再次 Base64 解码)
         let encrypted_content = std::str::from_utf8(&encrypted_bytes[16..])
-            .map_err(|e| BotError::ConfigError(format!("无效的 UTF-8 编码: {}", e)))?;
+            .map_err(|e| BotError::WebhookError(format!("无效的 UTF-8 编码: {}", e)))?;
 
         let ciphertext = base64::engine::general_purpose::STANDARD
             .decode(encrypted_content)
-            .map_err(|e| BotError::ConfigError(format!("内容 Base64 解码失败: {}", e)))?;
+            .map_err(|e| BotError::WebhookError(format!("内容 Base64 解码失败: {}", e)))?;
 
         // 4. 补齐 key 到 32 字节 (使用 \0 填充)
         let mut key_bytes = self.key.clone().into_bytes();
@@ -70,10 +70,10 @@ impl MessageDecryptor {
         let mut buf = ciphertext.clone();
         let decrypted = decryptor
             .decrypt_padded_mut::<Pkcs7>(&mut buf)
-            .map_err(|e| BotError::ConfigError(format!("解密失败: {:?}", e)))?;
+            .map_err(|e| BotError::WebhookError(format!("解密失败: {:?}", e)))?;
 
         let plaintext = String::from_utf8(decrypted.to_vec())
-            .map_err(|e| BotError::ConfigError(format!("解密结果不是有效的 UTF-8: {}", e)))?;
+            .map_err(|e| BotError::WebhookError(format!("解密结果不是有效的 UTF-8: {}", e)))?;
 
         Ok(plaintext)
     }

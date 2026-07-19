@@ -98,7 +98,7 @@ impl Playlist {
     /// 移除指定索引的歌曲
     pub fn remove(&mut self, original_index: usize) -> Result<Music> {
         if original_index >= self.original_list.len() {
-            return Err(BotError::ConfigError("索引超出范围".to_string()));
+            return Err(BotError::QueueError("索引超出范围".to_string()));
         }
 
         // 从原始列表中移除

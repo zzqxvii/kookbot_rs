@@ -5,7 +5,15 @@ use async_trait::async_trait;
 use crate::bot::commands::{CommandContext, CommandHandler, CommandResult};
 
 /// 帮助命令
-pub struct HelpCommand;
+pub struct HelpCommand {
+    help_text: String,
+}
+
+impl HelpCommand {
+    pub fn new(help_text: String) -> Self {
+        Self { help_text }
+    }
+}
 
 #[async_trait]
 impl CommandHandler for HelpCommand {
@@ -21,27 +29,11 @@ impl CommandHandler for HelpCommand {
         "显示帮助信息"
     }
     
-    fn usage(&self) -> &'static str {
-        "!help"
+    fn usage(&self) -> String {
+        "help".to_string()
     }
     
-    async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
-        let content = r#"🎵 **Kook Music Bot** 🎵
-
-**可用命令：**
-`{}help` - 显示此帮助
-`{}join` - 加入你的语音频道
-`{}leave` - 离开语音频道
-`{}wyy <链接或关键词>` - 播放网易云音乐
-`{}wyylogin` - 登录网易云账号（获取完整音质）
-
-**支持：**
-- 网易云音乐链接/分享链接
-- 歌曲ID
-- 歌曲名称搜索
-"#;
-        
-        let content = content.replace("{}", &ctx.config.prefix);
-        CommandResult::Reply(content)
+    async fn execute(&self, _ctx: CommandContext<'_>) -> CommandResult {
+        CommandResult::Reply(self.help_text.clone())
     }
 }

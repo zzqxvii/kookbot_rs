@@ -118,7 +118,7 @@ impl PreloadManager {
         self.task_tx
             .send(task)
             .await
-            .map_err(|e| BotError::ConfigError(format!("提交预加载任务失败: {}", e)))?;
+            .map_err(|e| BotError::QueueError(format!("提交预加载任务失败: {}", e)))?;
 
         debug!("提交预加载任务: {}", music_id);
         Ok(())
@@ -195,63 +195,6 @@ impl PreloadManager {
     fn get_cached_filename(&self, music: &Music) -> String {
         let id = self.get_music_id(music);
         format!("{}.mp3", id)
-    }
-
-    /// 清理缓存
-    pub async fn cleanup_cache(&self, max_size_mb: u64) -> Result<()> {
-        let mut entries = Vec::new();
-
-        // 读取缓存目录
-        let mut dir = fs::read_dir(&self.config.cache_dir)
-            .await
-            .map_err(|e| BotError::IoError(e))?;
-
-        while let Some(entry) = dir.next_entry().await.map_err(|e| BotError::IoError(e))? {
-            let metadata = entry.metadata().await.map_err(|e| BotError::IoError(e))?;
-
-            if metadata.is_file() {
-                let size = metadata.len();
-                let modified = metadata.modified().map_err(|e| BotError::IoError(e))?;
-
-                entries.push((entry.path(), size, modified));
-            }
-        }
-
-        // 计算总大小
-        let total_size: u64 = entries.iter().map(|(_, size, _)| size).sum();
-        let max_size = max_size_mb * 1024 * 1024;
-
-        if total_size <= max_size {
-            debug!(
-                "缓存大小正常: {} / {} MB",
-                total_size / 1024 / 1024,
-                max_size_mb
-            );
-            return Ok(());
-        }
-
-        // 按修改时间排序（删除最旧的）
-        entries.sort_by(|a, b| a.2.cmp(&b.2));
-
-        let mut freed = 0u64;
-        for (path, size, _) in entries {
-            if total_size - freed <= max_size {
-                break;
-            }
-
-            match fs::remove_file(&path).await {
-                Ok(_) => {
-                    freed += size;
-                    info!("删除缓存文件: {:?}, 释放 {} MB", path, size / 1024 / 1024);
-                }
-                Err(e) => {
-                    warn!("删除缓存文件失败: {:?} - {}", path, e);
-                }
-            }
-        }
-
-        info!("缓存清理完成，释放 {} MB", freed / 1024 / 1024);
-        Ok(())
     }
 }
 

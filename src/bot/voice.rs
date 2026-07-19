@@ -22,8 +22,8 @@ impl CommandHandler for JoinCommand {
         "加入你的语音频道"
     }
     
-    fn usage(&self) -> &'static str {
-        "!join"
+    fn usage(&self) -> String {
+        "!join".to_string()
     }
     
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
@@ -78,8 +78,8 @@ impl CommandHandler for LeaveCommand {
         "离开语音频道"
     }
     
-    fn usage(&self) -> &'static str {
-        "!leave"
+    fn usage(&self) -> String {
+        "!leave".to_string()
     }
     
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {

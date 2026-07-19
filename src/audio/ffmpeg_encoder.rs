@@ -115,7 +115,7 @@ impl FFmpegOpusEncoder {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| BotError::IoError(e))?;
+            .map_err(BotError::IoError)?;
 
 
         let stdin_writer = child.stdin.take()
@@ -167,8 +167,8 @@ impl FFmpegOpusEncoder {
             .ok_or_else(|| BotError::OpusError("stdin 不可用".to_string()))?;
 
         let pcm_bytes: Vec<u8> = pcm.iter().flat_map(|&s| s.to_le_bytes()).collect();
-        stdin.write_all(&pcm_bytes).map_err(|e| BotError::IoError(e))?;
-        stdin.flush().map_err(|e| BotError::IoError(e))?;
+        stdin.write_all(&pcm_bytes).map_err(BotError::IoError)?;
+        stdin.flush().map_err(BotError::IoError)?;
 
         let timeout_ms = self.config.frame_duration_ms + 100;
         let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms as u64);
@@ -189,11 +189,8 @@ impl FFmpegOpusEncoder {
                 }
             }
         }
-        loop {
-            match rx.recv_timeout(Duration::from_millis(2)) {
-                Ok(chunk) => opus_data.extend(chunk),
-                Err(_) => break,
-            }
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(2)) {
+            opus_data.extend(chunk);
         }
         trace!("编码 {} 样本为 {} 字节 Opus 数据", pcm.len(), opus_data.len());
         Ok(opus_data)
@@ -207,11 +204,8 @@ impl FFmpegOpusEncoder {
         let _ = self.stdin_writer.take();
         if let Some(ref rx) = self.opus_rx {
             let mut remaining = Vec::new();
-            loop {
-                match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(chunk) => remaining.extend(chunk),
-                    Err(_) => break,
-                }
+            while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(50)) {
+                remaining.extend(chunk);
             }
             let mut combined = result;
             combined.extend(remaining);

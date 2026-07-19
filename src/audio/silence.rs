@@ -15,6 +15,7 @@
 //! - 每帧约 3 bytes → 50 帧/秒 → ~150 bytes/s 实际载荷
 
 use crate::core::error::{BotError, Result};
+use super::rtp::RtpPacket;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -83,10 +84,10 @@ impl SilenceSender {
 
         let dest = format!("{}:{}", self.socket_addr.0, self.socket_addr.1);
         let socket = UdpSocket::bind("0.0.0.0:0")
-            .map_err(|e| BotError::IoError(e))?;
+            .map_err(BotError::IoError)?;
         socket
             .connect(&dest)
-            .map_err(|e| BotError::IoError(e))?;
+            .map_err(BotError::IoError)?;
         self.running.store(true, Ordering::Release);
 
         let running = self.running.clone();
@@ -96,12 +97,12 @@ impl SilenceSender {
         thread::spawn(move || {
             let mut seq: u16 = 0;
             let mut ts: u32 = 0;
-            let packet = build_silence_rtp();
             let mut buf = Vec::with_capacity(RTP_HEADER_SIZE + OPUS_SILENCE_FRAME.len());
             while running.load(Ordering::Acquire) {
                 buf.clear();
-                push_rtp_header(&mut buf, pt, seq, ts, ssrc);
-                buf.extend_from_slice(&packet);
+                RtpPacket::new(pt, seq, ts, ssrc, Vec::new())
+                    .write_header_to(&mut buf);
+                buf.extend_from_slice(OPUS_SILENCE_FRAME);
 
                 if socket.send(&buf).is_err() {
                     running.store(false, Ordering::Relaxed);
@@ -139,27 +140,6 @@ impl Drop for SilenceSender {
     }
 }
 
-// ── 辅助函数 ──────────────────────────────────────────
-
-/// 返回预编码的 Opus 静音帧载荷
-fn build_silence_rtp() -> Vec<u8> {
-    OPUS_SILENCE_FRAME.to_vec()
-}
-
-/// 推入 RTP 包头到 buffer
-fn push_rtp_header(buf: &mut Vec<u8>, pt: u8, seq: u16, timestamp: u32, ssrc: u32) {
-    // Byte 0: V=2, P=0, X=0, CC=0
-    buf.push(0x80);
-    // Byte 1: M=0, PT
-    buf.push(pt & 0x7F);
-    // Bytes 2-3: sequence number (big-endian)
-    buf.extend_from_slice(&seq.to_be_bytes());
-    // Bytes 4-7: timestamp (big-endian)
-    buf.extend_from_slice(&timestamp.to_be_bytes());
-    // Bytes 8-11: SSRC (big-endian)
-    buf.extend_from_slice(&ssrc.to_be_bytes());
-}
-
 // ── 测试 ──────────────────────────────────────────────
 
 #[cfg(test)]
@@ -176,7 +156,8 @@ mod tests {
     #[test]
     fn test_rtp_header_size() {
         let mut buf = Vec::new();
-        push_rtp_header(&mut buf, 111, 0, 0, 12345);
+        RtpPacket::new(111, 0, 0, 12345, Vec::new())
+            .write_header_to(&mut buf);
         assert_eq!(buf.len(), 12);
         // V=2, P=0, X=0, CC=0
         assert_eq!(buf[0], 0x80);

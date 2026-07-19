@@ -99,7 +99,7 @@ async fn run_bot_inner(config: BotConfig, _backend_manager: &kook_music_bot::com
     display_bot_info(&api_client).await;
     display_guilds(&api_client).await;
     
-    let (bot, _ws_handler, webhook_handler) = create_bot(config.clone(), api_client.clone());
+    let (bot, _ws_handler, webhook_handler) = create_bot(config.clone(), api_client.clone())?;
     
     match config.mode {
         ConnectionMode::Webhook => {
@@ -195,7 +195,7 @@ async fn check_netease_api(api_url: &str) -> Result<()> {
     info!("├{}┤", "─".repeat(WIDTH - 2));
     info!("  地址: {}", api_url);
     
-    let client = NeteaseClient::new(api_url);
+    let client = NeteaseClient::new(api_url)?;
     
     match tokio::time::timeout(
         std::time::Duration::from_secs(5),

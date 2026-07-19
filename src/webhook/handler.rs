@@ -37,7 +37,7 @@ pub struct DefaultWebhookHandler;
 impl WebhookHandler for DefaultWebhookHandler {
     async fn handle_event(&self, event_type: u32, data: Value) {
         match event_type {
-            0 => debug!("收到验证请求"),
+            event_type::CHALLENGE => debug!("收到验证请求"),
             _ => {
                 info!("收到事件类型 {}: {:?}", event_type, data);
             }

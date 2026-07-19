@@ -30,6 +30,18 @@ pub enum BotError {
     #[error("Gateway error: {0}")]
     GatewayError(String),
 
+    #[error("Webhook error: {0}")]
+    WebhookError(String),
+
+    #[error("Queue error: {0}")]
+    QueueError(String),
+
+    #[error("Music API error: {code} - {message}")]
+    MusicApiError { code: i32, message: String },
+
+    #[error("Startup error: {0}")]
+    StartupError(String),
+
     #[error("Invalid configuration: {0}")]
     ConfigError(String),
 

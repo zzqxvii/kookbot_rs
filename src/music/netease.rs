@@ -79,24 +79,24 @@ static SONG_ID_PATTERNS: LazyLock<[Regex; 4]> = LazyLock::new(|| [
 ]);
 
 impl NeteaseClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str) -> Result<Self> {
         let http = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("创建 HTTP 客户端失败");
+            .map_err(|e| BotError::StartupError(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-        Self {
+        Ok(Self {
             http,
             base_url: base_url.to_string(),
             cookie: None,
             cache_dir: String::from("./cache"),
-        }
+        })
     }
     
-    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Self {
-        let mut client = Self::new(base_url);
+    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Result<Self> {
+        let mut client = Self::new(base_url)?;
         client.cookie = cookie;
-        client
+        Ok(client)
     }
     
     pub fn set_cookie(&mut self, cookie: String) {
@@ -104,7 +104,7 @@ impl NeteaseClient {
     }
     
     pub fn has_cookie(&self) -> bool {
-        self.cookie.as_deref().map_or(false, |c| !c.is_empty())
+        self.cookie.as_deref().is_some_and(|c| !c.is_empty())
     }
     
     /// 设置缓存目录
@@ -121,10 +121,10 @@ impl NeteaseClient {
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(BotError::ConfigError(format!(
-                "网易云 API 返回错误状态: {}",
-                response.status()
-            )))
+            Err(BotError::MusicApiError {
+                code: response.status().as_u16() as i32,
+                message: format!("网易云 API 返回错误状态: {}", response.status()),
+            })
         }
     }
     
@@ -216,7 +216,7 @@ impl NeteaseClient {
             // 登录成功，从响应中获取并清理 cookie
             json.get("cookie")
                 .and_then(|c| c.as_str())
-                .map(|s| crate::common::utils::clean_cookie(s))
+                .map(crate::common::utils::clean_cookie)
         } else {
             None
         };
@@ -286,7 +286,7 @@ impl NeteaseClient {
         let url = format!("{}/playlist/detail", self.base_url);
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::ZERO)
             .as_millis() as u64;
         
         let mut request = self.http
@@ -606,7 +606,10 @@ impl NeteaseClient {
             });
         }
 
-        let song = songs.into_iter().next().unwrap();
+        let song = songs.into_iter().next().ok_or_else(|| BotError::MusicApiError {
+            code: 500,
+            message: "搜索结果为空".into(),
+        })?;
         let url = self.get_song_url(song.id).await?;
         Ok((song, url))
     }

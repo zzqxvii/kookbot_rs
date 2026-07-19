@@ -7,5 +7,5 @@ pub mod handler;
 pub mod verifier;
 
 pub use server::WebhookServer;
-pub use handler::WebhookHandler;
+pub use handler::{WebhookHandler, event_type};
 pub use verifier::verify_signature;

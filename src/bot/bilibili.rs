@@ -46,38 +46,7 @@ impl BilibiliCommand {
         port: u16,
         streaming_info: VoiceStreamingInfo,
     ) -> tokio::task::JoinHandle<()> {
-        let play_state = self.play_state.clone();
-        tokio::task::spawn_blocking(move || {
-            use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
-
-            let mut streamer = match FFmpegDirectStreamer::new(
-                StreamerConfig::from(&streaming_info),
-                play_state.clone(),
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("创建流处理器失败: {}", e);
-                    return;
-                }
-            };
-
-            match streamer.start_stream_url(
-                &file_path,
-                &ip,
-                port,
-                streaming_info.rtcp_port,
-            ) {
-                Ok(_) => {
-                    let _ = streamer.wait();
-                    play_state.set_stopped();
-                    info!("🎵 B站歌曲播放完成");
-                }
-                Err(e) => {
-                    error!("推流失败: {}", e);
-                    play_state.set_stopped();
-                }
-            }
-        })
+        crate::bot::playback::play_song_file(file_path, ip, port, streaming_info, self.play_state.clone()).await
     }
 
     /// 处理单曲播放
@@ -228,8 +197,8 @@ impl CommandHandler for BilibiliCommand {
         "播放B站音乐"
     }
 
-    fn usage(&self) -> &'static str {
-        "!bilibili <BV号/视频链接/搜索关键词>"
+    fn usage(&self) -> String {
+        "!bilibili <BV号/视频链接/搜索关键词>".to_string()
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {

@@ -82,7 +82,9 @@ pub trait CommandHandler: Send + Sync {
     fn description(&self) -> &'static str;
     
     /// 使用方法
-    fn usage(&self) -> &'static str;
+    fn usage(&self) -> String {
+        String::new()
+    }
     
     /// 处理命令
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult;
@@ -248,8 +250,8 @@ mod tests {
         fn description(&self) -> &'static str {
             "mock handler for testing"
         }
-        fn usage(&self) -> &'static str {
-            "mock"
+        fn usage(&self) -> String {
+            "mock".to_string()
         }
         async fn execute(&self, _ctx: CommandContext<'_>) -> CommandResult {
             CommandResult::Reply(format!("handled: {}", self.name))
@@ -310,9 +312,10 @@ mod tests {
             network: NetworkConfig::default(),
             music: MusicConfig::default(),
             player: PlayerConfig::default(),
+            config_path: None,
         };
         let ps = Arc::new(PlayState::new());
-        let nc = Arc::new(RwLock::new(NeteaseClient::new("http://localhost")));
+        let nc = Arc::new(RwLock::new(NeteaseClient::new("http://localhost").unwrap()));
         let vm = Arc::new(Mutex::new(None));
         let api_client = Arc::new(KookClient::new(&config).unwrap());
         (api_client, config, ps, nc, vm)

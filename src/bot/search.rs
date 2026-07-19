@@ -39,8 +39,8 @@ impl CommandHandler for UnifiedSearchCommand {
         "跨平台搜索歌曲（网易云 + QQ音乐 + B站）"
     }
 
-    fn usage(&self) -> &'static str {
-        "/搜索 <关键词>"
+    fn usage(&self) -> String {
+        "/搜索 <关键词>".to_string()
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {

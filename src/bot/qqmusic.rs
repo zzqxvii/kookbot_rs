@@ -46,38 +46,7 @@ impl QQMusicCommand {
         port: u16,
         streaming_info: VoiceStreamingInfo,
     ) -> tokio::task::JoinHandle<()> {
-        let play_state = self.play_state.clone();
-        tokio::task::spawn_blocking(move || {
-            use crate::audio::{FFmpegDirectStreamer, StreamerConfig};
-
-            let mut streamer = match FFmpegDirectStreamer::new(
-                StreamerConfig::from(&streaming_info),
-                play_state.clone(),
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("创建流处理器失败: {}", e);
-                    return;
-                }
-            };
-
-            match streamer.start_stream_url(
-                &file_path,
-                &ip,
-                port,
-                streaming_info.rtcp_port,
-            ) {
-                Ok(_) => {
-                    let _ = streamer.wait();
-                    play_state.set_stopped();
-                    info!("🎵 QQ音乐歌曲播放完成");
-                }
-                Err(e) => {
-                    error!("推流失败: {}", e);
-                    play_state.set_stopped();
-                }
-            }
-        })
+        crate::bot::playback::play_song_file(file_path, ip, port, streaming_info, self.play_state.clone()).await
     }
 
     /// 处理歌单播放
@@ -194,7 +163,7 @@ impl QQMusicCommand {
 
                     // 获取文件路径：优先用预下载
                     let file_path = {
-                        let mut guard = next_file.lock().unwrap();
+                        let mut guard = next_file.lock().expect("next_file lock poisoned");
                         match guard.take() {
                             Some(Some(p)) => p,
                             Some(None) => {
@@ -235,10 +204,7 @@ impl QQMusicCommand {
                                 None => return,
                             };
                             let result = client.download_song(&url, next_tid).await.ok();
-                            match nf.lock() {
-                                Ok(mut g) => *g = Some(result),
-                                Err(_) => {}
-                            }
+                            if let Ok(mut g) = nf.lock() { *g = Some(result) }
                         });
                     }
 
@@ -291,58 +257,17 @@ impl QQMusicCommand {
                     
                     });
 
-                    // 分块喂入 stdin，每块间检查切歌标志
+                    // 分块喂入 stdin（ID3 跳过 + 切歌/停止检查内置于 feed_file_to_stdin）
                     info!("[{}/{}] 正在播放: {}", idx + 1, total_count, file_path);
                     match std::fs::File::open(&file_path) {
                         Ok(mut f) => {
-                            let mut hdr = [0u8; 10];
-                            if std::io::Read::read_exact(&mut f, &mut hdr).is_ok()
-                                && &hdr[0..3] == b"ID3"
-                            {
-                                let major_version = hdr[3];
-                                let skip = if major_version == 2 {
-                                    // ID3v2.2: 3 字节大端序大小
-                                    10 + ((hdr[6] as u64) << 16)
-                                        + ((hdr[7] as u64) << 8)
-                                        + (hdr[8] as u64)
-                                } else {
-                                    // ID3v2.3/2.4: 4 字节 synchsafe 大小
-                                    10 + ((hdr[6] as u64 & 0x7F) << 21)
-                                        + ((hdr[7] as u64 & 0x7F) << 14)
-                                        + ((hdr[8] as u64 & 0x7F) << 7)
-                                        + (hdr[9] as u64 & 0x7F)
-                                };
-                                std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(skip)).ok();
-                            } else {
-                                std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0)).ok();
-                            }
-                            let mut buf = [0u8; 65536];
-                            loop {
-                                if play_state.is_next_requested() {
-                                    play_state.clear_next_request();
-                                    info!("切歌 → 下一首");
-                                    break;
-                                }
-                                if play_state.is_stop_requested() {
-                                    break;
-                                }
-                                match std::io::Read::read(&mut f, &mut buf) {
-                                    Ok(0) => {
-                                        info!("[{}/{}] 文件读取完毕", idx + 1, total_count);
-                                        break;
-                                    }
-                                    Ok(n) => {
-                                        if std::io::Write::write_all(&mut stdin, &buf[..n]).is_err() {
-                                            error!("[{}/{}] 写入 stdin 失败", idx + 1, total_count);
-                                            break;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("[{}/{}] 读取文件失败: {}", idx + 1, total_count, e);
-                                        break;
-                                    }
-                                }
-                            }
+                            crate::audio::skip_id3_tag(&mut f);
+                            crate::audio::feed_file_to_stdin(
+                                &mut f,
+                                &mut stdin,
+                                &play_state,
+                                &format!("{}/{}", idx + 1, total_count),
+                            );
                         }
                         Err(e) => {
                             error!("打开文件失败: {}: {}", file_path, e);
@@ -532,8 +457,8 @@ impl CommandHandler for QQMusicCommand {
         "播放QQ音乐"
     }
 
-    fn usage(&self) -> &'static str {
-        "!qqmusic <歌曲链接或关键词>"
+    fn usage(&self) -> String {
+        "!qqmusic <歌曲链接或关键词>".to_string()
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {

@@ -98,15 +98,15 @@ async fn verify_request(
     let timestamp = headers
         .get("X-Kook-Timestamp")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| BotError::ConfigError("缺少 X-Kook-Timestamp 头部".to_string()))?;
+        .ok_or_else(|| BotError::WebhookError("缺少 X-Kook-Timestamp 头部".to_string()))?;
 
     let signature = headers
         .get("X-Kook-Signature")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| BotError::ConfigError("缺少 X-Kook-Signature 头部".to_string()))?;
+        .ok_or_else(|| BotError::WebhookError("缺少 X-Kook-Signature 头部".to_string()))?;
 
     crate::webhook::verifier::verify_signature(token, body.as_bytes(), timestamp, signature)
-        .map_err(|e| BotError::ConfigError(e.to_string()))?;
+        .map_err(|e| BotError::WebhookError(e.to_string()))?;
 
     Ok(())
 }

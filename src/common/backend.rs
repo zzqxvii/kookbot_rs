@@ -125,9 +125,12 @@ impl ApiBackendManager {
 
     /// 停止所有子进程（优雅关闭：SIGTERM → 等待 5s → SIGKILL）
     pub async fn shutdown(&self) {
-        let mut processes = self.processes.lock()
-            .unwrap_or_else(|e| e.into_inner());
-        for (name, mut child) in processes.drain() {
+        let processes: Vec<_> = {
+            let mut guard = self.processes.lock()
+                .unwrap_or_else(|e| e.into_inner());
+            guard.drain().collect()
+        };
+        for (name, mut child) in processes {
             info!("[ApiBackend] 正在停止 {} ...", name);
 
             if let Some(pid) = child.id() {

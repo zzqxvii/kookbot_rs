@@ -17,7 +17,7 @@ impl CommandHandler for TestHandler {
     fn name(&self) -> &'static str { self.name }
     fn aliases(&self) -> Vec<&'static str> { self.aliases.clone() }
     fn description(&self) -> &'static str { "测试命令" }
-    fn usage(&self) -> &'static str { "!test" }
+    fn usage(&self) -> String { "!test".to_string() }
 
     async fn execute(&self, _ctx: CommandContext<'_>) -> CommandResult {
         CommandResult::Reply(self.response.to_string())
@@ -181,6 +181,7 @@ fn test_config_defaults() {
         network: Default::default(),
         music: Default::default(),
         player: Default::default(),
+        config_path: None,
     };
 
     assert!(config.is_admin("anyone")); // 空列表 = 所有人是管理员
@@ -202,6 +203,7 @@ fn test_config_admin_check() {
         network: Default::default(),
         music: Default::default(),
         player: Default::default(),
+        config_path: None,
     };
 
     assert!(config.is_admin("admin1"));

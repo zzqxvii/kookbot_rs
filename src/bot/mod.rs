@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 use crate::api::KookClient;
 use crate::common::play_state::PlayState;
 use crate::core::config::BotConfig;
+use crate::core::error::Result;
 use crate::gateway::{
     ButtonClickData, EventHandler, MessageData, ReactionEventData, SystemMessageData,
     VoiceChannelEventData,
@@ -23,6 +24,7 @@ use crate::music::NeteaseClient;
 use crate::music::QQMusicClient;
 use crate::music::BilibiliClient;
 use crate::player::VoiceManager;
+use crate::webhook::handler::event_type;
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -30,6 +32,7 @@ pub mod streaming;
 pub mod commands;
 pub mod help;
 pub mod lyric;
+pub mod playback;
 pub mod search;
 pub mod status;
 pub mod voice;
@@ -69,7 +72,7 @@ pub struct Bot {
 
 impl Bot {
     /// 创建新的 Bot 实例
-    pub fn new(config: BotConfig, api_client: KookClient) -> Self {
+    pub fn new(config: BotConfig, api_client: KookClient) -> Result<Self> {
         // 清理 cookie 格式
         let netease_cookie = config.music.netease_cookie.as_ref()
             .map(|c| crate::common::utils::clean_cookie(c))
@@ -77,7 +80,7 @@ impl Bot {
         let mut netease_client = NeteaseClient::with_cookie(
             &config.music.netease_api_url,
             netease_cookie,
-        );
+        )?;
         
         netease_client.set_cache_dir(config.music.cache_dir.clone());
         if netease_client.has_cookie() {
@@ -93,7 +96,7 @@ impl Bot {
         let mut qqmusic_client = QQMusicClient::with_cookie(
             &config.music.qqmusic_api_url,
             qqmusic_cookie,
-        );
+        )?;
 
         qqmusic_client.set_cache_dir(config.music.cache_dir.clone());
         if qqmusic_client.has_cookie() {
@@ -109,7 +112,7 @@ impl Bot {
         let mut bilibili_client = BilibiliClient::with_cookie(
             &config.music.bilibili_api_url,
             bilibili_cookie,
-        );
+        )?;
 
         bilibili_client.set_cache_dir(config.music.cache_dir.clone());
         if bilibili_client.has_cookie() {
@@ -121,7 +124,6 @@ impl Bot {
         let mut command_router = CommandRouter::new(&config.prefix);
 
         // 注册基础命令
-        command_router.register(Arc::new(HelpCommand));
         command_router.register(Arc::new(JoinCommand));
         command_router.register(Arc::new(LeaveCommand));
         // 注册音乐模块命令
@@ -147,7 +149,11 @@ impl Bot {
             bilibili_client_arc.clone(),
         )));
 
-        Self {
+        // 注册帮助命令（放在最后以获取完整命令列表）
+        let help_text = command_router.get_help();
+        command_router.register(Arc::new(HelpCommand::new(help_text)));
+
+        Ok(Self {
             config,
             api_client: Arc::new(api_client),
             command_router,
@@ -155,7 +161,7 @@ impl Bot {
             netease_client: netease_client_arc,
             voice_manager: Arc::new(Mutex::new(None)),
             voice_channel_id: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
     /// 设置当前语音频道 ID（供流式播放模块在加入语音时调用）
@@ -391,10 +397,10 @@ impl crate::webhook::WebhookHandler for BotWebhookHandler {
         info!("[Webhook] 收到事件: type={}", event_type);
         
         match event_type {
-            0 => {
+            event_type::CHALLENGE => {
                 info!("[Webhook] 收到验证请求");
             }
-            1 => {
+            event_type::MESSAGE_CREATE => {
                 // 解析为 MessageData 并处理
                 if let Ok(msg_data) = serde_json::from_value::<MessageData>(data.clone()) {
                     if msg_data.is_text() || msg_data.is_kmarkdown() {
@@ -415,10 +421,10 @@ impl crate::webhook::WebhookHandler for BotWebhookHandler {
 pub fn create_bot(
     config: BotConfig,
     api_client: KookClient,
-) -> (Arc<Bot>, BotEventHandler, BotWebhookHandler) {
-    let bot = Arc::new(Bot::new(config, api_client));
+) -> Result<(Arc<Bot>, BotEventHandler, BotWebhookHandler)> {
+    let bot = Arc::new(Bot::new(config, api_client)?);
     let ws_handler = BotEventHandler::new(bot.clone());
     let webhook_handler = BotWebhookHandler::new(bot.clone());
     
-    (bot, ws_handler, webhook_handler)
+    Ok((bot, ws_handler, webhook_handler))
 }

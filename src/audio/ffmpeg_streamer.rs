@@ -68,14 +68,14 @@ impl FFmpegDirectStreamer {
             .arg("-version")
             .output()
             .map_err(|e| {
-                BotError::ConfigError(format!(
+                BotError::StartupError(format!(
                     "FFmpeg 未找到或无法执行: {}. 请确保 FFmpeg 已安装并在 PATH 中",
                     e
                 ))
             })?;
 
         if !output.status.success() {
-            return Err(BotError::ConfigError(
+            return Err(BotError::StartupError(
                 "FFmpeg 执行失败，请检查 FFmpeg 安装".into(),
             ));
         }
@@ -136,7 +136,7 @@ impl FFmpegDirectStreamer {
         let mut child = cmd
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BotError::IoError(e))?;
+            .map_err(BotError::IoError)?;
 
         let pid = child.id();
         info!("FFmpeg 进程已启动 (PID: {:?})", pid);
@@ -171,7 +171,7 @@ impl FFmpegDirectStreamer {
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BotError::IoError(e))?;
+            .map_err(BotError::IoError)?;
 
         let pid = child.id();
         info!("FFmpeg stdin 进程已启动 (PID: {:?})", pid);
@@ -180,7 +180,8 @@ impl FFmpegDirectStreamer {
         self.running.store(true, Ordering::Release);
         self.spawn_stderr_reader(&mut child);
 
-        let stdin = child.stdin.take().expect("stdin should be piped");
+        let stdin = child.stdin.take()
+            .ok_or_else(|| BotError::QueueError("stdin 管道不可用".into()))?;
 
         self.process = Some(child);
         Ok(stdin)
@@ -199,7 +200,7 @@ impl FFmpegDirectStreamer {
         }
 
         if file_paths.is_empty() {
-            return Err(BotError::ConfigError("文件列表为空".into()));
+            return Err(BotError::QueueError("文件列表为空".into()));
         }
 
         // 清理先前残留的 concat 文件
@@ -215,13 +216,13 @@ impl FFmpegDirectStreamer {
                 .unwrap_or(0)
         ));
 
-        let mut f = std::fs::File::create(&concat_path).map_err(|e| BotError::IoError(e))?;
+        let mut f = std::fs::File::create(&concat_path).map_err(BotError::IoError)?;
         use std::io::Write;
         for path in file_paths {
             let normalized = path.replace('\\', "/");
-            writeln!(f, "file '{}'", normalized).map_err(|e| BotError::IoError(e))?;
+            writeln!(f, "file '{}'", normalized).map_err(BotError::IoError)?;
         }
-        f.flush().map_err(|e| BotError::IoError(e))?;
+        f.flush().map_err(BotError::IoError)?;
         drop(f);
         self.concat_file = Some(concat_path.clone());
 
@@ -233,7 +234,7 @@ impl FFmpegDirectStreamer {
         let mut child = self.build_rtp_command(dest_ip, dest_port, rtcp_port, &input_args)
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BotError::IoError(e))?;
+            .map_err(BotError::IoError)?;
 
         let pid = child.id();
         info!("FFmpeg concat 进程已启动 (PID: {:?})", pid);
@@ -262,7 +263,7 @@ impl FFmpegDirectStreamer {
     pub fn wait(&mut self) -> Result<()> {
         if let Some(mut child) = self.process.take() {
             info!("[FFmpeg] 等待进程退出...");
-            let status = child.wait().map_err(|e| BotError::IoError(e))?;
+            let status = child.wait().map_err(BotError::IoError)?;
             info!("[FFmpeg] 进程已退出，退出码: {:?}", status.code());
             self.running.store(false, Ordering::Release);
         }

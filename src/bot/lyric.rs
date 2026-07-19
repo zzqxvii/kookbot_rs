@@ -32,8 +32,8 @@ impl CommandHandler for LyricCommand {
         "查询歌曲歌词"
     }
 
-    fn usage(&self) -> &'static str {
-        "/歌词 <歌曲ID>"
+    fn usage(&self) -> String {
+        "/歌词 <歌曲ID>".to_string()
     }
 
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {

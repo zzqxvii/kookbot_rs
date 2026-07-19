@@ -6,16 +6,13 @@ use crate::core::error::{BotError, Result};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ConnectionMode {
+    #[default]
     Websocket,
     Webhook,
 }
 
-impl Default for ConnectionMode {
-    fn default() -> Self {
-        ConnectionMode::Websocket
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BotConfig {

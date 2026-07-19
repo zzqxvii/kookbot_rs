@@ -1,24 +1,31 @@
-# 🎵 KookBot.rs 🤖
+# 🎵 KookBot.rs (RKM)
 
-[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.93+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
-用 Rust 编写的高性能 Kook 机器人框架，采用模块化设计，支持多种功能扩展。
+用 Rust 编写的高性能 Kook 机器人框架，采用模块化设计，支持多种音乐平台和功能扩展。
 
 > **注意**: 本项目定位为通用的 Kook Bot 平台，音乐播放只是内置的其中一个功能模块。通过命令系统，可以轻松添加更多功能模块。
 
 ## ✨ 核心特性
 
 - 🧩 **模块化命令系统**: 可插拔的命令处理器，支持动态注册/注销
-- 🎶 **音乐模块** (内置): 支持网易云音乐搜索和播放
-- 🎙️ **语音支持**: 完整的语音频道加入/离开功能
+- 🎶 **多平台音乐支持**:
+  - **网易云音乐** — 搜索、歌单、链接、ID 播放
+  - **QQ 音乐** — 搜索、歌单、链接播放
+  - **哔哩哔哩** — 搜索、BV号、视频链接播放
+- 🔍 **跨平台搜索**: 同时搜索网易云 + QQ + B站，一键选择播放
+- 📝 **歌词查询**: 支持通过歌曲 ID 查询歌词
+- 🎙️ **语音支持**: 完整的语音频道加入/离开，RTP 流式推流
+- 🎛️ **播放控制卡片**: 下一首、停止按钮（支持管理员权限控制）
 - 🔄 **双模式连接**:
-  - **WebSocket 模式** - 主动连接到 Kook Gateway
-  - **Webhook 模式** - 被动接收 Kook 推送的事件
+  - **WebSocket 模式** — 主动连接到 Kook Gateway（支持自动重连）
+  - **Webhook 模式** — 被动接收 Kook 推送的事件
+- 🔐 **Webhook 加密**: 支持 Kook Webhook 加密消息解密验证
 - ⚡ **高性能**: Rust 原生实现，内存占用低 (~50MB)，启动快速
 - ⚙️ **灵活配置**: 完善的 TOML 配置系统
-- 📡 **RTP 推流**: 直接将音频推送到 Kook 语音服务器
+- 🌐 **API 后端管理**: 自动启动/管理多个音乐 API 后端
 
 ## 🛠️ 技术栈
 
@@ -31,10 +38,11 @@
 | Webhook 服务器 | [Axum](https://github.com/tokio-rs/axum) |
 | 配置管理 | TOML |
 | 日志 | [tracing](https://github.com/tokio-rs/tracing) |
+| 二维码生成 | [qrcode](https://crates.io/crates/qrcode) / [image](https://crates.io/crates/image) |
 
 ## 📦 依赖项
 
-- **Rust** 1.75+ （推荐最新稳定版）
+- **Rust** 1.93+ （推荐最新稳定版）
 - **FFmpeg** （音乐模块需要，用于 Opus 音频编码）
 
 ### 安装 FFmpeg
@@ -89,6 +97,9 @@ cp config.example.toml config.toml
 token = "你的 Kook Bot Token"
 prefix = "/"
 
+# 管理员用户ID列表（为空则所有人可操作控制按钮）
+admins = []
+
 [audio]
 volume = 0.5
 bit_rate = 128000
@@ -97,9 +108,27 @@ bit_rate = 128000
 cache_dir = "./cache"
 max_cache_size_mb = 1024
 netease_api_url = "http://localhost:3000"
+qqmusic_api_url = "http://localhost:3300"
+bilibili_api_url = "http://localhost:3400"
+
+[player]
+max_queue_size = 100
+allow_duplicates = false
+preload_count = 2
 ```
 
-> **注意**: 需要先启动 [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) 并确保端口 3000 可用。
+> **注意**: 需要先启动对应的音乐 API 后端服务：
+> - 网易云: [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) (端口 3000)
+> - QQ音乐: [QQMusicApi](https://github.com/jsososo/QQMusicApi) (端口 3300)
+> - B站: BilibiliMusicApi (端口 3400)
+
+或者设置环境变量让 Bot 自动管理后端：
+
+```bash
+# 设置 API 项目目录，Bot 会自动启动
+export NETEASE_API_DIR=/path/to/NeteaseCloudMusicApi
+export QQMUSIC_API_DIR=/path/to/QQMusicApi
+```
 
 ### 5. 邀请机器人进服务器
 
@@ -113,14 +142,14 @@ netease_api_url = "http://localhost:3000"
 # 开发模式 (带日志)
 cargo run
 
-# 生产模式 (优化)
+# 生产模式 (优化编译)
 cargo run --release
 
 # 指定配置文件
 cargo run --release -- --config /path/to/config.toml
 ```
 
-## 💬 使用方法
+## 💬 命令列表
 
 在 Kook 中发送命令（默认前缀 `/`）：
 
@@ -131,19 +160,39 @@ cargo run --release -- --config /path/to/config.toml
 | `/leave` | `/l` | 离开语音频道 | `/leave` |
 | `/wyy` | - | 播放网易云音乐 | `/wyy 晴天` |
 | `/wyylogin` | - | 登录网易云账号 | `/wyylogin` |
+| `/qqmusic` | `/qq`, `/qq音乐` | 播放 QQ 音乐 | `/qqmusic 七里香` |
+| `/bilibili` | `/bili`, `/b站` | 播放 B 站音乐 | `/bilibili BV1xx` |
+| `/搜索` | `/search`, `/搜`, `/s` | 跨平台搜索歌曲 | `/搜索 晴天` |
+| `/歌词` | `/lyric`, `/lrc`, `/gc` | 查询歌曲歌词 | `/歌词 188755` |
+| `/状态` | `/status`, `/zt`, `/bot` | 查看播放状态 | `/状态` |
 
 ### 播放支持
+
+每个音乐平台命令均支持多种输入方式：
 
 - 🎵 **歌曲名称搜索**: `/wyy 晴天`
 - 🔗 **歌曲链接**: `/wyy https://music.163.com/song?id=xxx`
 - 📋 **歌单链接**: `/wyy https://music.163.com/playlist?id=xxx`
 - 🔢 **歌曲 ID**: `/wyy 188755`
+- 📼 **B站 BV 号**: `/bilibili BV1xx411P7pC`
+
+### 播放控制
+
+播放歌曲时会自动发送控制卡片，包含：
+- ⏭️ **下一首** — 跳过当前歌曲
+- ⏹️ **停止** — 停止播放并离开语音频道
+
+> 设置 `admins` 列表后，仅管理员可操作控制按钮。
 
 ## 🧩 模块化架构
 
 项目采用模块化设计，命令系统支持动态扩展：
 
 ```rust
+use async_trait::async_trait;
+use kook_music_bot::bot::commands::{CommandContext, CommandHandler, CommandResult};
+use std::sync::Arc;
+
 // 创建自定义命令
 pub struct MyCommand;
 
@@ -152,8 +201,8 @@ impl CommandHandler for MyCommand {
     fn name(&self) -> &'static str { "mycmd" }
     fn aliases(&self) -> Vec<&'static str> { vec!["m"] }
     fn description(&self) -> &'static str { "我的自定义命令" }
-    fn usage(&self) -> &'static str { "!mycmd" }
-    
+    fn usage(&self) -> &'static str { "/mycmd" }
+
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
         CommandResult::Reply("Hello!".to_string())
     }
@@ -165,69 +214,102 @@ router.register(Arc::new(MyCommand));
 
 ### 模块列表
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| `bot/commands` | ✅ 核心 | 命令路由系统 |
-| `bot/music` | ✅ 内置 | 网易云音乐播放 |
-| `api` | ✅ 核心 | Kook API 客户端 |
-| `gateway` | ✅ 核心 | WebSocket 连接 |
-| `webhook` | ✅ 核心 | Webhook 服务器 |
-| `audio` | ✅ 核心 | 音频处理 (编解码/RTP) |
-| `player` | ✅ 核心 | 播放控制 (队列/播放列表) |
-| `music` | ✅ 核心 | 网易云音乐 API |
-| `common` | ✅ 核心 | 公共工具 (缓存/日志/状态) |
+| 模块 | 说明 |
+|------|------|
+| `bot/commands` | 命令路由系统 (Router + Handler trait) |
+| `bot/music` | 网易云音乐播放模块 |
+| `bot/qqmusic` | QQ 音乐播放模块 |
+| `bot/bilibili` | 哔哩哔哩音乐播放模块 |
+| `bot/search` | 跨平台统一搜索 |
+| `bot/lyric` | 歌词查询模块 |
+| `bot/status` | Bot 状态查看 |
+| `bot/voice` | 语音频道加入/离开 |
+| `bot/wyylogin` | 网易云扫码登录 |
+| `bot/playback` | 播放控制模块 |
+| `bot/streaming` | 共享推流辅助逻辑 |
+| `api` | Kook REST API 客户端 |
+| `gateway` | WebSocket Gateway 客户端（含自动重连） |
+| `webhook` | Webhook 服务器（含加密解密） |
+| `audio` | 音频处理 (Symphonia解码 / FFmpeg编码 / RTP推流) |
+| `player` | 播放控制 (队列 / 播放列表 / 预加载 / 语音管理) |
+| `music` | 音乐源 API 客户端 (网易云 / QQ / B站) |
+| `common` | 公共工具 (缓存 / 日志 / 卡片消息 / 后端管理) |
+| `core` | 核心 (配置管理 / 错误定义) |
 
 ## 📁 项目结构
 
 ```
-kookbot_rs/
-├── Cargo.toml              # Rust 项目配置
-├── config.example.toml     # 配置示例
-├── config.toml             # 本地配置文件 (gitignored)
+RKM/
+├── Cargo.toml                  # Rust 项目配置
+├── config.example.toml         # 配置示例
+├── config.toml                 # 本地配置文件 (gitignored)
 ├── src/
-│   ├── main.rs             # 程序入口
-│   ├── lib.rs              # 模块导出
-│   ├── api/                # Kook REST API
-│   │   └── client.rs       # API 客户端实现
-│   ├── audio/              # 音频处理
-│   │   ├── decoder.rs      # 音频解码
-│   │   ├── encoder.rs      # Opus 编码
-│   │   ├── ffmpeg_encoder.rs
-│   │   ├── ffmpeg_streamer.rs
-│   │   ├── rtp.rs         # RTP 推流
-│   │   └── streamer.rs
-│   ├── bot/                # Bot 核心
-│   │   ├── mod.rs         # Bot 主逻辑
-│   │   ├── commands.rs    # 命令系统
-│   │   └── music.rs       # 音乐模块
-│   ├── common/             # 公共工具
-│   │   ├── cache.rs       # 缓存管理
-│   │   ├── card.rs        # Kook 卡片消息
-│   │   ├── logging.rs     # 日志系统
-│   │   ├── models.rs      # 数据模型
-│   │   ├── play_state.rs  # 播放状态
-│   │   └── utils.rs       # 工具函数
-│   ├── core/               # 核心
-│   │   ├── config.rs      # 配置管理
-│   │   └── error.rs       # 错误定义
-│   ├── gateway/            # WebSocket
-│   │   ├── client.rs      # Gateway 客户端
-│   │   ├── events.rs      # 事件定义
-│   │   └── protocol.rs    # 协议实现
-│   ├── music/              # 音乐源
-│   │   ├── downloader.rs  # 音乐下载
-│   │   └── netease.rs     # 网易云 API
-│   ├── player/             # 播放控制
-│   │   ├── manager.rs     # 语音管理
-│   │   ├── playlist.rs   # 播放列表
-│   │   ├── preloader.rs   # 预加载
-│   │   └── queue.rs       # 队列管理
-│   └── webhook/            # Webhook 服务器
-│       ├── handler.rs     # 事件处理
-│       ├── server.rs      # HTTP 服务器
-│       └── verifier.rs    # 签名验证
-├── target/                 # 编译输出
-└── cache/                  # 音乐缓存
+│   ├── main.rs                 # 程序入口 / 启动流程
+│   ├── lib.rs                  # 模块导出
+│   ├── api/
+│   │   ├── mod.rs
+│   │   └── client.rs           # Kook REST API 客户端
+│   ├── audio/
+│   │   ├── mod.rs
+│   │   ├── decoder.rs          # Symphonia 音频解码
+│   │   ├── ffmpeg_encoder.rs   # FFmpeg 编码器封装
+│   │   ├── ffmpeg_streamer.rs  # FFmpeg 流式编码
+│   │   ├── rtp.rs             # RTP 推流
+│   │   ├── silence.rs         # 静音帧生成
+│   │   └── streamer.rs        # 流式推流器
+│   ├── bot/
+│   │   ├── mod.rs             # Bot 主逻辑 / 事件处理
+│   │   ├── commands.rs        # 命令系统 (Router / Handler trait)
+│   │   ├── help.rs            # 帮助命令
+│   │   ├── voice.rs           # join / leave 命令
+│   │   ├── music.rs           # 网易云播放命令
+│   │   ├── qqmusic.rs         # QQ音乐播放命令
+│   │   ├── bilibili.rs        # B站音乐播放命令
+│   │   ├── search.rs          # 跨平台搜索命令
+│   │   ├── lyric.rs           # 歌词查询命令
+│   │   ├── status.rs          # 状态查看命令
+│   │   ├── wyylogin.rs        # 网易云登录命令
+│   │   ├── playback.rs        # 播放控制模块
+│   │   └── streaming.rs       # 共享推流辅助
+│   ├── common/
+│   │   ├── mod.rs
+│   │   ├── cache.rs           # 缓存管理
+│   │   ├── card.rs            # Kook 卡片消息
+│   │   ├── console.rs         # 控制台格式化输出
+│   │   ├── logging.rs         # 日志系统
+│   │   ├── models.rs          # 数据模型
+│   │   ├── play_state.rs      # 播放状态管理
+│   │   ├── backend.rs         # API 后端进程管理
+│   │   └── utils.rs           # 工具函数
+│   ├── core/
+│   │   ├── mod.rs
+│   │   ├── config.rs          # 配置管理 (TOML)
+│   │   └── error.rs           # 错误定义
+│   ├── gateway/
+│   │   ├── mod.rs
+│   │   ├── client.rs          # Gateway WebSocket 客户端
+│   │   ├── events.rs          # 事件定义
+│   │   └── protocol.rs        # 协议实现
+│   ├── music/
+│   │   ├── mod.rs
+│   │   ├── downloader.rs      # 音乐下载
+│   │   ├── netease.rs         # 网易云 API 客户端
+│   │   ├── qqmusic.rs         # QQ音乐 API 客户端
+│   │   └── bilibili.rs        # B站 API 客户端
+│   ├── player/
+│   │   ├── mod.rs
+│   │   ├── manager.rs         # 语音连接管理
+│   │   ├── playlist.rs       # 播放列表
+│   │   ├── preloader.rs      # 预加载
+│   │   └── queue.rs          # 队列管理
+│   └── webhook/
+│       ├── mod.rs
+│       ├── handler.rs        # 事件处理
+│       ├── server.rs         # HTTP 服务器
+│       ├── verifier.rs       # 签名验证
+│       └── decrypt.rs        # 消息解密
+└── tests/
+    └── integration_test.rs
 ```
 
 ## ⚙️ 配置详解
@@ -236,8 +318,8 @@ kookbot_rs/
 
 **WebSocket 模式** (默认):
 - 机器人主动连接到 Kook 服务器
-- 适合大多数场景
-- 配置简单，无需公网 IP
+- 支持自动重连（指数退避，最大 60 秒）
+- 适合大多数场景，无需公网 IP
 
 ```toml
 mode = "websocket"
@@ -246,7 +328,7 @@ mode = "websocket"
 **Webhook 模式**:
 - Kook 服务器主动推送事件到机器人
 - 需要机器人可从公网访问
-- 适合大规模部署
+- 支持加密消息验证和解密
 
 ```toml
 mode = "webhook"
@@ -270,18 +352,48 @@ volume = 0.5
 bit_rate = 128000
 ```
 
+### 音乐源配置
+
+```toml
+[music]
+# 缓存目录和大小限制
+cache_dir = "./cache"
+max_cache_size_mb = 1024
+
+# 网易云音乐 API
+netease_api_url = "http://localhost:3000"
+netease_cookie = ""      # 可选，登录后填入 Cookie 获取完整音质
+
+# QQ 音乐 API
+qqmusic_api_url = "http://localhost:3300"
+qqmusic_cookie = ""      # 可选
+
+# B站 API
+bilibili_api_url = "http://localhost:3400"
+bilibili_cookie = ""     # 可选
+```
+
 ### 播放器配置
 
 ```toml
 [player]
-# 最大队列长度
-max_queue_size = 100
+max_queue_size = 100       # 最大队列长度
+allow_duplicates = false   # 是否允许重复歌曲
+preload_count = 2          # 预加载歌曲数量
+```
 
-# 是否允许重复歌曲
-allow_duplicates = false
+### 网络配置
 
-# 预加载数量
-preload_count = 2
+```toml
+[network]
+timeout = 30               # 连接超时（秒）
+```
+
+### 管理员配置
+
+```toml
+# 管理员用户ID列表，为空则所有人可操作控制按钮
+admins = ["user_id_1", "user_id_2"]
 ```
 
 ## 🐛 故障排除
@@ -299,11 +411,16 @@ preload_count = 2
 ffmpeg -version
 ```
 
-### 网易云 API 不可用
+Bot 启动时会自动检测 FFmpeg，未安装将直接报错退出。
 
-1. 确保 [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) 已启动
-2. 检查 `config.toml` 中的 `netease_api_url` 配置正确
-3. 默认端口 3000 是否被占用
+### 音乐 API 不可用
+
+1. 确保对应的 API 后端服务已启动：
+   - 网易云: [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) → 端口 3000
+   - QQ音乐: [QQMusicApi](https://github.com/jsososo/QQMusicApi) → 端口 3300
+   - B站: BilibiliMusicApi → 端口 3400
+2. 检查 `config.toml` 中对应的 `*_api_url` 配置正确
+3. 或设置环境变量 `NETEASE_API_DIR` / `QQMUSIC_API_DIR` 让 Bot 自动管理后端进程
 
 ### 音频播放异常
 
@@ -331,10 +448,11 @@ ffmpeg -version
 
 ## 🙏 致谢
 
-- [Kook](https://kookapp.cn/) - 优秀的聊天平台
-- [kookbc](https://github.com/KookBC/KookBC) - Java SDK 参考
-- [symphonia](https://github.com/pdeljanov/symphonia) - 优秀的 Rust 音频库
-- [tokio](https://tokio.rs/) - 强大的异步运行时
+- [Kook](https://kookapp.cn/) — 优秀的聊天平台
+- [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) — 网易云音乐 API
+- [QQMusicApi](https://github.com/jsososo/QQMusicApi) — QQ 音乐 API
+- [Symphonia](https://github.com/pdeljanov/symphonia) — 优秀的 Rust 音频解码库
+- [Tokio](https://tokio.rs/) — 强大的异步运行时
 
 ---
 

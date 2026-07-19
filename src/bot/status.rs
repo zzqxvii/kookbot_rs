@@ -32,8 +32,8 @@ impl CommandHandler for BotStatusCommand {
         "查看 Bot 当前播放状态和统计信息"
     }
     
-    fn usage(&self) -> &'static str {
-        "/状态"
+    fn usage(&self) -> String {
+        "/状态".to_string()
     }
     
     async fn execute(&self, _ctx: CommandContext<'_>) -> CommandResult {

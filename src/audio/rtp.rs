@@ -64,6 +64,31 @@ impl RtpPacket {
         buf
     }
 
+    /// 序列化 RTP 包头（不含负载）到缓冲区
+    pub fn write_header_to(&self, buf: &mut Vec<u8>) {
+        buf.reserve(12);
+
+        // 字节 0: 版本(2) | 填充(1) | 扩展(1) | CSRC 计数(4)
+        let byte0 = (self.version << 6)
+            | (if self.padding { 0x20 } else { 0 })
+            | (if self.extension { 0x10 } else { 0 })
+            | (self.csrc_count & 0x0F);
+        buf.push(byte0);
+
+        // 字节 1: 标记(1) | 负载类型(7)
+        let byte1 = (if self.marker { 0x80 } else { 0 }) | (self.payload_type & 0x7F);
+        buf.push(byte1);
+
+        // 字节 2-3: 序列号
+        buf.extend_from_slice(&self.sequence_number.to_be_bytes());
+
+        // 字节 4-7: 时间戳
+        buf.extend_from_slice(&self.timestamp.to_be_bytes());
+
+        // 字节 8-11: SSRC
+        buf.extend_from_slice(&self.ssrc.to_be_bytes());
+    }
+
     /// 序列化到已有缓冲区（复用分配，不清除原内容）
     pub fn write_to(&self, buf: &mut Vec<u8>) {
         buf.reserve(12 + self.payload.len());

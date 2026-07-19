@@ -53,6 +53,11 @@ pub fn verify_signature(
     timestamp: &str,
     signature: &str,
 ) -> Result<(), VerifyError> {
+    // 拒绝空令牌，防止攻击者使用空密钥伪造签名
+    if token.is_empty() {
+        return Err(VerifyError::DecodeError("验证令牌不能为空".to_string()));
+    }
+
     // 检查时间戳（防止重放攻击）
     let ts = timestamp
         .parse::<u64>()
@@ -60,7 +65,7 @@ pub fn verify_signature(
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::ZERO)
         .as_secs();
 
     // 允许 5 分钟的时间差

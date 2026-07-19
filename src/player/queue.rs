@@ -111,7 +111,7 @@ impl QueueManager {
         // 检查队列是否已满
         let queue = self.queue.read().await;
         if queue.len() >= self.config.max_size {
-            return Err(BotError::ConfigError("播放队列已满".to_string()));
+            return Err(BotError::QueueError("播放队列已满".to_string()));
         }
         drop(queue);
 
@@ -122,7 +122,7 @@ impl QueueManager {
                 .iter()
                 .any(|item| item.music.title == music.title && item.music.author == music.author)
             {
-                return Err(BotError::ConfigError("歌曲已在队列中".to_string()));
+                return Err(BotError::QueueError("歌曲已在队列中".to_string()));
             }
         }
 
@@ -229,13 +229,13 @@ impl QueueManager {
         let mut queue = self.queue.write().await;
 
         if index >= queue.len() {
-            return Err(BotError::ConfigError("索引超出范围".to_string()));
+            return Err(BotError::QueueError("索引超出范围".to_string()));
         }
 
         // 不能移除正在播放的歌曲
         if let Some(current) = *self.current_index.read().await {
             if current == index {
-                return Err(BotError::ConfigError("不能移除正在播放的歌曲".to_string()));
+                return Err(BotError::QueueError("不能移除正在播放的歌曲".to_string()));
             }
         }
 

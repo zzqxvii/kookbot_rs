@@ -61,24 +61,24 @@ static PLAYLIST_ID_PATTERNS: LazyLock<[Regex; 2]> = LazyLock::new(|| [
 ]);
 
 impl QQMusicClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str) -> Result<Self> {
         let http = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("创建 HTTP 客户端失败");
+            .map_err(|e| BotError::StartupError(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-        Self {
+        Ok(Self {
             http,
             base_url: base_url.to_string(),
             cookie: None,
             cache_dir: String::from("./cache"),
-        }
+        })
     }
 
-    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Self {
-        let mut client = Self::new(base_url);
+    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Result<Self> {
+        let mut client = Self::new(base_url)?;
         client.cookie = cookie;
-        client
+        Ok(client)
     }
 
     pub fn set_cookie(&mut self, cookie: String) {
@@ -86,7 +86,7 @@ impl QQMusicClient {
     }
 
     pub fn has_cookie(&self) -> bool {
-        self.cookie.as_deref().map_or(false, |c| !c.is_empty())
+        self.cookie.as_deref().is_some_and(|c| !c.is_empty())
     }
 
     /// 设置缓存目录
@@ -116,10 +116,10 @@ impl QQMusicClient {
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(BotError::ConfigError(format!(
-                "QQ 音乐 API 返回错误状态: {}",
-                response.status()
-            )))
+            Err(BotError::MusicApiError {
+                code: response.status().as_u16() as i32,
+                message: format!("QQ 音乐 API 返回错误状态: {}", response.status()),
+            })
         }
     }
 
@@ -406,7 +406,10 @@ impl QQMusicClient {
             });
         }
 
-        let song = songs.into_iter().next().unwrap();
+        let song = songs.into_iter().next().ok_or_else(|| BotError::MusicApiError {
+            code: 500,
+            message: "搜索结果为空".into(),
+        })?;
         let url = self.get_song_url(song.id).await?;
         Ok((song, url))
     }

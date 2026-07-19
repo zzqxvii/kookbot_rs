@@ -14,11 +14,13 @@ pub struct WyyLoginCommand {
     netease_client: Arc<RwLock<NeteaseClient>>,
     config: BotConfig,
     login_in_progress: Arc<AtomicBool>,
+    usage: String,
 }
 
 impl WyyLoginCommand {
     pub fn new(netease_client: Arc<RwLock<NeteaseClient>>, config: BotConfig) -> Self {
-        Self { netease_client, config, login_in_progress: Arc::new(AtomicBool::new(false)) }
+        let usage = format!("{}wyylogin", config.prefix);
+        Self { netease_client, config, login_in_progress: Arc::new(AtomicBool::new(false)), usage }
     }
     
     /// 生成二维码图片并上传到 Kook
@@ -68,9 +70,8 @@ impl CommandHandler for WyyLoginCommand {
         "登录网易云账号（获取完整音质）"
     }
     
-    fn usage(&self) -> &'static str {
-        let s = format!("{}wyylogin", self.config.prefix);
-        Box::leak(s.into_boxed_str())
+    fn usage(&self) -> String {
+        self.usage.clone()
     }
     
     async fn execute(&self, ctx: CommandContext<'_>) -> CommandResult {
@@ -150,7 +151,13 @@ impl CommandHandler for WyyLoginCommand {
         let login_flag = self.login_in_progress.clone();
         
         tokio::spawn(async move {
-            let netease_client = NeteaseClient::new(&netease_api_url);
+            let netease_client = match NeteaseClient::new(&netease_api_url) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("创建网易云客户端失败: {}", e);
+                    return;
+                }
+            };
             let mut attempts = 0;
             let max_attempts = 60;
             let key_str = key_clone.clone();

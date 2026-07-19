@@ -68,7 +68,7 @@ impl KookClient {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(config.network.timeout))
             .build()
-            .map_err(|e| BotError::ConfigError(format!("创建 HTTP 客户端失败: {}", e)))?;
+            .map_err(|e| BotError::StartupError(format!("创建 HTTP 客户端失败: {}", e)))?;
 
         Ok(Self {
             http,
@@ -340,7 +340,7 @@ impl KookClient {
             let part = reqwest::multipart::Part::bytes(image_data.to_vec())
                 .file_name("qrcode.png")
                 .mime_str("image/png")
-                .map_err(|e| BotError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+                .map_err(|e| BotError::IoError(std::io::Error::other(e)))?;
 
             let form = reqwest::multipart::Form::new()
                 .part("file", part);

@@ -42,26 +42,26 @@ static URL_PATTERNS: LazyLock<[Regex; 3]> = LazyLock::new(|| [
 ]);
 
 impl BilibiliClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str) -> Result<Self> {
         let http = Client::builder()
             .user_agent("Mozilla/5.0 (compatible; RKM-Bot/1.0)")
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("创建 HTTP 客户端失败");
+            .map_err(|e| BotError::StartupError(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-        Self {
+        Ok(Self {
             http,
             base_url: base_url.to_string(),
             cookie: None,
             cache_dir: PathBuf::from("./cache"),
-        }
+        })
     }
 
-    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Self {
-        let mut client = Self::new(base_url);
+    pub fn with_cookie(base_url: &str, cookie: Option<String>) -> Result<Self> {
+        let mut client = Self::new(base_url)?;
         client.cookie = cookie;
-        client
+        Ok(client)
     }
 
     pub fn set_cookie(&mut self, cookie: String) {
@@ -69,7 +69,7 @@ impl BilibiliClient {
     }
 
     pub fn has_cookie(&self) -> bool {
-        self.cookie.as_deref().map_or(false, |c| !c.is_empty())
+        self.cookie.as_deref().is_some_and(|c| !c.is_empty())
     }
 
     /// 设置缓存目录
@@ -124,7 +124,7 @@ impl BilibiliClient {
 
         let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
         if code != 200 {
-            return Err(BotError::KookApiError {
+            return Err(BotError::MusicApiError {
                 code: code as i32,
                 message: "B站搜索失败".to_string(),
             });
@@ -169,7 +169,7 @@ impl BilibiliClient {
 
         let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
         if code != 200 {
-            return Err(BotError::KookApiError {
+            return Err(BotError::MusicApiError {
                 code: code as i32,
                 message: "获取B站歌曲详情失败".to_string(),
             });
@@ -177,13 +177,13 @@ impl BilibiliClient {
 
         let song = json
             .get("data")
-            .ok_or_else(|| BotError::KookApiError {
+            .ok_or_else(|| BotError::MusicApiError {
                 code: 404,
                 message: "歌曲不存在".to_string(),
             })?;
 
         serde_json::from_value(song.clone())
-            .map_err(|e| BotError::KookApiError {
+            .map_err(|e| BotError::MusicApiError {
                 code: -1,
                 message: format!("解析B站歌曲详情失败: {}", e),
             })
@@ -203,7 +203,7 @@ impl BilibiliClient {
 
         let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
         if code != 200 {
-            return Err(BotError::KookApiError {
+            return Err(BotError::MusicApiError {
                 code: code as i32,
                 message: "获取B站歌曲URL失败".to_string(),
             });
@@ -251,7 +251,7 @@ impl BilibiliClient {
         let response = self.add_cookie(request).send().await?;
 
         if !response.status().is_success() {
-            return Err(BotError::KookApiError {
+            return Err(BotError::MusicApiError {
                 code: response.status().as_u16() as i32,
                 message: format!("下载失败: {}", response.status()),
             });
@@ -282,13 +282,16 @@ impl BilibiliClient {
         // 搜索歌曲
         let songs = self.search(input, 1).await?;
         if songs.is_empty() {
-            return Err(BotError::KookApiError {
+            return Err(BotError::MusicApiError {
                 code: 404,
                 message: format!("未找到B站歌曲: {}", input),
             });
         }
 
-        let song = songs.into_iter().next().unwrap();
+        let song = songs.into_iter().next().ok_or_else(|| BotError::MusicApiError {
+            code: 500,
+            message: "搜索结果为空".into(),
+        })?;
         let url = self.get_song_url(&song.bvid).await?;
         Ok((song, url))
     }
